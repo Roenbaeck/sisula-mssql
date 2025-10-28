@@ -3,6 +3,7 @@ param(
   [Parameter(Mandatory=$true)] [string]$Database,
   [switch]$RegisterTrustedAssembly = $false,
   [string]$TrustedAssemblyDescription = 'SisulaRenderer',
+  [switch]$PruneTrustedAssemblies = $false,
   [switch]$TrustServerCertificate = $true,
   [switch]$IntegratedSecurity = $true,
   [string]$User,
@@ -122,6 +123,28 @@ IF NOT EXISTS (SELECT 1 FROM sys.trusted_assemblies WHERE [hash] = @hash)
   EXEC sys.sp_add_trusted_assembly @hash = @hash, @description = @desc;
 "@
   Invoke-SqlParams -connStr $csMaster -sql $trustSql -parameters @{ hash = ([byte[]]$hashByteArray); desc = [string]$TrustedAssemblyDescription }
+
+  if ($PruneTrustedAssemblies) {
+    Write-Host "Pruning older trusted assemblies with description '$TrustedAssemblyDescription'..."
+    $pruneSql = @"
+DECLARE cur CURSOR LOCAL FAST_FORWARD FOR
+  SELECT [hash] FROM sys.trusted_assemblies WHERE [description] = @desc AND [hash] <> @hash;
+DECLARE @h VARBINARY(64);
+OPEN cur;
+FETCH NEXT FROM cur INTO @h;
+WHILE @@FETCH_STATUS = 0
+BEGIN
+  BEGIN TRY
+    EXEC sys.sp_drop_trusted_assembly @hash = @h;
+  END TRY BEGIN CATCH
+    -- ignore failures; continue with others
+  END CATCH
+  FETCH NEXT FROM cur INTO @h;
+END
+CLOSE cur; DEALLOCATE cur;
+"@;
+    Invoke-SqlParams -connStr $csMaster -sql $pruneSql -parameters @{ hash = ([byte[]]$hashByteArray); desc = [string]$TrustedAssemblyDescription }
+  }
 }
 
 Write-Host "Dropping existing function and assembly (if present) in $Database..."
