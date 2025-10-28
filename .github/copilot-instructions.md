@@ -13,7 +13,8 @@
 ## Project-specific conventions
 
 - Template blocks are delimited by /*~ and ~*/. Everything outside blocks is treated as literal SQL and passed through unchanged. If a template has no /*~ ~*/ delimiters at all, the entire template is treated as Sisula code (tokens + $/ directives).
-- In-block language supports line directives: `$/ foreach <var> in <path>` ... `$/ end` (nesting supported). The loop body is rendered per item with the loop variable injected into the JSON context.
+- In-block language supports line directives: `$/ foreach <var> in <path>` ... `$/ endfor` (nesting supported). The loop body is rendered per item with the loop variable injected into the JSON context.
+- Also supports `$/ if <condition>` ... `$/ endif` for conditional rendering.
 - Token expansion forms supported: `$path.to.value$` and `${path.to.value}$`. Paths support bracket indexing like `source.parts[0].name`.
 - Bindings are passed as a single JSON document to the CLR function. Resolution uses SQL Server JSON functions (JSON_VALUE/JSON_QUERY/OPENJSON). No third-party JSON libraries are used. Use existing templates for examples of JSON shapes (see `templates/` and `sql/test_render.sql`).
 
@@ -55,7 +56,7 @@
   /*~
   $/ foreach part in source.parts
   CREATE TABLE [$S_SCHEMA$].[$part.qualified$_Typed] (...);
-  $/ end
+  $/ endfor
   ~*/
 
 - Token rules: Always delimit tokens with both a starting and ending dollar sign. Examples: `$S_SCHEMA$`, `$source.parts[0].name$`, `${VARIABLES.GENERATED_AT}$`. The bare form without a closing `$` (e.g., `$S_SCHEMA`) is not supported.

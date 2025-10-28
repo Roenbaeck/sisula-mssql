@@ -107,6 +107,8 @@ public static class SisulaRenderer
         // Require $/ prefix for all directives
     var reForeach = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s*$", RegexOptions.IgnoreCase);
     var reEndFor = new Regex("^\\s*\\$/\\s*endfor\\s*$", RegexOptions.IgnoreCase);
+    var reIfInline = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase);
+    var reIf = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s*$", RegexOptions.IgnoreCase);
     var reEndIf = new Regex("^\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase); // For future if-blocks
 
         var sb = new StringBuilder();
@@ -212,6 +214,59 @@ public static class SisulaRenderer
                 continue;
             }
 
+            // First, attempt single-line inline if: $/ if <cond> <content> $/ endif
+            var mIfInline = reIfInline.Match(line);
+            if (mIfInline.Success)
+            {
+                var condition = mIfInline.Groups[1].Value.Trim();
+                var content = mIfInline.Groups[2].Value;
+                bool condResult = EvalConditionInContext(condition, ctxJson, loopVars);
+                if (condResult)
+                {
+                    sb.Append(RenderInline(content, ctxJson, loopVars));
+                }
+                if (hasNewline) sb.Append('\n');
+                pos = hasNewline ? (lineEnd + 1) : text.Length;
+                continue;
+            }
+
+            var mIf = reIf.Match(line);
+            if (mIf.Success)
+            {
+                // Capture body until matching endif (only $/ endif closes if)
+                pos = hasNewline ? (lineEnd + 1) : text.Length;
+                var bodyStart = pos;
+                int depth = 1;
+                while (pos < text.Length && depth > 0)
+                {
+                    int nextLineEnd = text.IndexOf('\n', pos);
+                    bool nl = nextLineEnd >= 0;
+                    int stop = nl ? nextLineEnd : text.Length;
+                    int stopTrim = stop;
+                    if (stopTrim > pos && text[stopTrim - 1] == '\r') stopTrim--;
+                    var innerLine = text.Substring(pos, stopTrim - pos);
+
+                    if (reIf.IsMatch(innerLine)) depth++;
+                    else if (reEndIf.IsMatch(innerLine)) { depth--; if (depth == 0) { pos = nl ? (nextLineEnd + 1) : text.Length; break; } }
+                    // $/ endfor does NOT close if
+
+                    if (depth > 0)
+                    {
+                        pos = nl ? (nextLineEnd + 1) : text.Length;
+                    }
+                }
+                var body = text.Substring(bodyStart, Math.Max(0, pos - bodyStart - 0));
+
+                var condition = mIf.Groups[1].Value.Trim();
+                // Evaluate condition using available loop variables so expressions like LOOP.first work
+                bool condResult = EvalConditionInContext(condition, ctxJson, loopVars);
+                if (condResult)
+                {
+                    sb.Append(RenderScript(body, ctxJson, loopVars));
+                }
+                continue;
+            }
+
             // Content line: expand tokens inline and preserve newline
             sb.Append(RenderInline(line, ctxJson, loopVars));
             if (hasNewline) sb.Append('\n');
@@ -306,6 +361,33 @@ public static class SisulaRenderer
         return Truthy(val);
     }
 
+    // Evaluate a condition expression with access to global ctxJson and loopVars (for LOOP.first, etc.)
+    private static bool EvalConditionInContext(string expr, string ctxJson, Dictionary<string, string> loopVars)
+    {
+        if (string.IsNullOrWhiteSpace(expr)) return true;
+        // If expression references LOOP or another loop var, and loopVars contains it, resolve accordingly.
+        // We'll delegate to EvalConditionOnItem by passing the matched itemJson and varName when appropriate.
+
+        // Simple heuristic: if expr contains an identifier followed by a dot (like LOOP.first),
+        // treat the left-most identifier as varName and evaluate against its JSON.
+        var m = Regex.Match(expr, "^(\\w+)\\.(.+)$");
+        if (m.Success)
+        {
+            var varName = m.Groups[1].Value;
+            var rest = m.Groups[2].Value;
+            string itemJson = null;
+            if (loopVars != null && loopVars.ContainsKey(varName)) itemJson = loopVars[varName];
+            // If varName not found in loopVars, fall back to global ctxJson
+            if (itemJson == null) itemJson = ctxJson ?? string.Empty;
+            // Evaluate the rest relative to varName
+            return EvalConditionOnItem(itemJson, varName, rest);
+        }
+
+        // No var prefix; evaluate as global (pass empty varName to have ResolvePathValue treat paths as global)
+        return EvalConditionOnItem(ctxJson, string.Empty, expr);
+    }
+
+
     private static string GetOrderKey(string itemJson, string varName, string orderPath)
     {
         if (string.IsNullOrEmpty(orderPath)) return null;
@@ -388,6 +470,11 @@ public static class SisulaRenderer
 
     private static string ResolvePathValue(string token, string itemJson, string varName)
     {
+        if (string.IsNullOrEmpty(varName))
+        {
+            // Global path
+            return JsonRead(itemJson, "$." + token);
+        }
         string inner;
         if (token.StartsWith(varName + ".", StringComparison.Ordinal)) inner = token.Substring(varName.Length + 1);
         else if (token.Equals(varName, StringComparison.Ordinal)) inner = string.Empty;
