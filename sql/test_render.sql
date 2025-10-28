@@ -21,15 +21,15 @@ CREATE PROCEDURE [$SCHEMA$].[$SOURCE$_CreateTypedTables] AS
 BEGIN
     SET NOCOUNT ON;
 
-	$/foreach t in tables
+	$/ foreach t in tables
 	-- Create: $t.table$_Staging
 	CREATE TABLE [$SCHEMA$].[$t.table$_Staging] (
-		$/foreach c in t.columns
-		[$c.name$] $c.type$,
-		$/end 
+		$/ foreach c in t.columns order by c.ordinal 
+		[$c.name$] $c.type$, -- column number $LOOP.index$ (ordinal $c.ordinal$)
+		$/ endfor
 		[created_at] datetime2 not null default ''$TIMESTAMP$''
 	);
-	$/end
+	$/ endfor
 ~*/
 	-- The End
 END

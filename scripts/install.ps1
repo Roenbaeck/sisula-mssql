@@ -177,7 +177,6 @@ FROM @bytes
 WITH PERMISSION_SET = $PermissionSet;
 "@
 Write-Host "Creating assembly in $Database (PERMISSION_SET = $PermissionSet)..."
-Write-Host "Creating assembly in $Database (PERMISSION_SET = $PermissionSet)..."
 Invoke-SqlParams -connStr $csDb -sql $createAsm -parameters @{ bytes = ([byte[]]$bytes) }
 
 $createFn = @'

@@ -6,7 +6,7 @@
 ## Key files and where to look
 
 - `clr/SisulaRenderer.cs` — the entire renderer implementation (token syntax, line directives, JSON binding access). Use this to implement new template features.
-- `scripts/build.ps1` — how the DLL is compiled (csc). No third‑party deps required.
+- `scripts/build.ps1` — how the DLL is compiled (csc). No third‑party dependencies required. All JSON handling is performed using SQL Server's built-in JSON functions; no third-party JSON libraries are used.
 - `sql/assemblies/CreateAssemblies.sql`, `sql/CreateFunction.sql` — DB steps to register the function `dbo.fn_sisulate`. Enabling CLR and trusted assembly registration are DBA tasks (instance-level).
 - `templates/CreateTypedTables.sql` — example template demonstrating line directives (`$/ foreach`, `$/ end`), token usage, and common patterns to follow.
 
@@ -15,7 +15,7 @@
 - Template blocks are delimited by /*~ and ~*/. Everything outside blocks is treated as literal SQL and passed through unchanged. If a template has no /*~ ~*/ delimiters at all, the entire template is treated as Sisula code (tokens + $/ directives).
 - In-block language supports line directives: `$/ foreach <var> in <path>` ... `$/ end` (nesting supported). The loop body is rendered per item with the loop variable injected into the JSON context.
 - Token expansion forms supported: `$path.to.value$` and `${path.to.value}$`. Paths support bracket indexing like `source.parts[0].name`.
-- Bindings are passed as a single JSON document to the CLR function. Resolution uses SQL Server JSON functions (JSON_VALUE/JSON_QUERY/OPENJSON). Use existing templates for examples of JSON shapes (see `templates/` and `sql/test_render.sql`).
+- Bindings are passed as a single JSON document to the CLR function. Resolution uses SQL Server JSON functions (JSON_VALUE/JSON_QUERY/OPENJSON). No third-party JSON libraries are used. Use existing templates for examples of JSON shapes (see `templates/` and `sql/test_render.sql`).
 
 ## Typical developer workflows (explicit commands)
 
@@ -45,7 +45,7 @@
 
 ## Integration points and constraints
 
-- The CLR depends only on the Microsoft SQL CLR host and SQL Server JSON features (2016+). For production keep `clr strict security` ON and trust the assembly via `sys.sp_add_trusted_assembly` (SHA-512).
+- The CLR depends only on the Microsoft SQL CLR host and SQL Server JSON features (2016+). No third-party libraries (including Newtonsoft.Json) are used. For production keep `clr strict security` ON and trust the assembly via `sys.sp_add_trusted_assembly` (SHA-512).
 - The renderer returns rendered SQL as an NVARCHAR(max) from `dbo.fn_sisulate`. Consumers are expected to execute that SQL in the DB if desired.
 
 ## Examples from the codebase (copy/paste friendly)
