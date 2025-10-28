@@ -4,6 +4,8 @@ A minimal Sisula-like templating engine running inside SQL Server using SQLCLR.
 
 Features
 - SQL as outer language; templated blocks delimited by `/*~ ... ~*/`.
+ - SQL as outer language; templated blocks delimited by `/*~ ... ~*/`.
+    - If a template contains no `/*~ ... ~*/` delimiters, the entire file is treated as a Sisula script (tokens + line directives).
 - Line directives inside blocks using `$/ foreach ...` and `$/ end` (nesting supported).
 - Token expansion with `$path.to.value$` and `${path.to.value}$`.
 - Bindings passed as a single JSON document (e.g., `S_SCHEMA`, `VARIABLES`, `source.parts`).
@@ -28,7 +30,8 @@ Quick start
 
 Templates
 - Author templates as `.sql` files under `templates/` to get proper SQL syntax highlighting in SSMS/VS Code.
-- Use `/*~ ... ~*/` blocks with `$/ foreach ...` directives and `$...$` tokens.
+- Use `/*~ ... ~*/` blocks with `$/ foreach ...` directives and `$...$` tokens. Blocks scope where Sisula is active.
+- If you omit blocks, the whole file is processed as Sisula (useful for pure-generation cases).
 - Install them into the database with `scripts/install.ps1 -InstallTemplates`, then call `dbo.fn_sisulate_named('<name>', @bindings)`.
 
 Notes

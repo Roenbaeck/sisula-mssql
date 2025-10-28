@@ -5,15 +5,15 @@
 
 ## Key files and where to look
 
-- `clr/SisulaRenderer.cs` — the entire renderer implementation (token syntax, foreach handling, JSON binding access). Use this to implement new template features.
+- `clr/SisulaRenderer.cs` — the entire renderer implementation (token syntax, line directives, JSON binding access). Use this to implement new template features.
 - `scripts/build.ps1` — how the DLL is compiled (csc). No third‑party deps required.
 - `sql/assemblies/CreateAssemblies.sql`, `sql/CreateFunction.sql` — DB steps to register the function `dbo.fn_sisulate`. Enabling CLR and trusted assembly registration are DBA tasks (instance-level).
-- `templates/CreateTypedTables.sqlslt` — example template demonstrating foreach blocks, token usage, and common patterns to follow.
+- `templates/CreateTypedTables.sql` — example template demonstrating line directives (`$/ foreach`, `$/ end`), token usage, and common patterns to follow.
 
 ## Project-specific conventions
 
-- Template blocks are delimited by /*~ and ~*/. Everything outside blocks is treated as literal SQL and passed through unchanged.
-- In-block language supports `foreach <var> in <path> ... end` (single-level loops). The loop body is rendered per item with the loop variable injected into the JSON context.
+- Template blocks are delimited by /*~ and ~*/. Everything outside blocks is treated as literal SQL and passed through unchanged. If a template has no /*~ ~*/ delimiters at all, the entire template is treated as Sisula code (tokens + $/ directives).
+- In-block language supports line directives: `$/ foreach <var> in <path>` ... `$/ end` (nesting supported). The loop body is rendered per item with the loop variable injected into the JSON context.
 - Token expansion forms supported: `$path.to.value$` and `${path.to.value}$`. Paths support bracket indexing like `source.parts[0].name`.
 - Bindings are passed as a single JSON document to the CLR function. Resolution uses SQL Server JSON functions (JSON_VALUE/JSON_QUERY/OPENJSON). Use existing templates for examples of JSON shapes (see `templates/` and `sql/test_render.sql`).
 
@@ -50,12 +50,12 @@
 
 ## Examples from the codebase (copy/paste friendly)
 
-- Foreach example (from `templates/CreateTypedTables.sqlslt`):
+- Foreach example (from `templates/CreateTypedTables.sql`):
 
   /*~
-  foreach part in source.parts
-  CREATE TABLE [$S_SCHEMA].[$part.qualified$_Typed] (...);
-  end
+  $/ foreach part in source.parts
+  CREATE TABLE [$S_SCHEMA$].[$part.qualified$_Typed] (...);
+  $/ end
   ~*/
 
 - Token rules: Always delimit tokens with both a starting and ending dollar sign. Examples: `$S_SCHEMA$`, `$source.parts[0].name$`, `${VARIABLES.GENERATED_AT}$`. The bare form without a closing `$` (e.g., `$S_SCHEMA`) is not supported.

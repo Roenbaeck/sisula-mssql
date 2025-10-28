@@ -20,6 +20,12 @@ public static class SisulaRenderer
     // Split outer SQL and /*~ ... ~*/ blocks
     private static string Render(string tpl, string ctxJson)
     {
+        // If no explicit blocks are present, treat the whole template as a Sisula script
+        if (tpl == null) return string.Empty;
+        if (tpl.IndexOf("/*~", StringComparison.Ordinal) < 0)
+        {
+            return RenderScript(tpl, ctxJson, null);
+        }
         return Render(tpl, ctxJson, null);
     }
 
