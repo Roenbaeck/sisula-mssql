@@ -1,0 +1,12 @@
+# Build artifacts
+bin/
+
+# Logs
+*.log
+
+# VS Code
+.vscode/
+
+# OS junk
+Thumbs.db
+.DS_Store

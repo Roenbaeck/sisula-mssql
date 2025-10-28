@@ -1,1 +1,0 @@
-Place Newtonsoft.Json.dll here (e.g., version 13.0.1 or 13.0.3). This assembly must be registered in SQL Server before loading SisulaRenderer.dll.
