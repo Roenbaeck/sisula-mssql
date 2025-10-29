@@ -192,10 +192,10 @@ public static class SisulaRenderer
                         ? new Dictionary<string, string>(loopVars)
                         : new Dictionary<string, string>();
                     childVars[varName] = itemJson;
-                    // Add $LOOP variable as JSON (manual construction, no third-party JSON, C# 5 compatible)
+                    // Add per-variable loop metadata (no global LOOP). Key: __LOOP__<varName>
                     var loopJson = string.Format("{{\"index\":{0},\"count\":{1},\"first\":{2},\"last\":{3}}}",
                         i, n, (i == 0 ? "true" : "false"), (i == n - 1 ? "true" : "false"));
-                    childVars["LOOP"] = loopJson;
+                    childVars["__LOOP__" + varName] = loopJson;
                     sb.Append(RenderScript(body, ctxJson, childVars));
                 }
                 continue;
@@ -370,6 +370,32 @@ public static class SisulaRenderer
 
         // Simple heuristic: if expr contains an identifier followed by a dot (like LOOP.first),
         // treat the left-most identifier as varName and evaluate against its JSON.
+        // Handle method-style metadata: varName.first(), varName.last(), varName.index(), varName.count()
+        var mMethod = Regex.Match(expr, "^(\\w+)\\.(first|last|index|count)\\s*\\(\\s*\\)\\s*$", RegexOptions.IgnoreCase);
+        if (mMethod.Success)
+        {
+            var varName = mMethod.Groups[1].Value;
+            var method = mMethod.Groups[2].Value.ToLowerInvariant();
+            if (loopVars != null && loopVars.ContainsKey("__LOOP__" + varName))
+            {
+                var meta = loopVars["__LOOP__" + varName];
+                switch (method)
+                {
+                    case "first": return string.Equals(JsonRead(meta, "$.first"), "true", StringComparison.OrdinalIgnoreCase);
+                    case "last": return string.Equals(JsonRead(meta, "$.last"), "true", StringComparison.OrdinalIgnoreCase);
+                    case "index":
+                        double idx; return TryParseDoubleInvariant(JsonRead(meta, "$.index"), out idx) && idx != 0; // non-zero truthiness for index when used in boolean context
+                    case "count":
+                        double cnt; return TryParseDoubleInvariant(JsonRead(meta, "$.count"), out cnt) && cnt != 0;
+                }
+            }
+            return false;
+        }
+
+        // NOTE: property-style access (varName.first) is NOT supported for loop metadata to avoid ambiguity.
+        // Only the method form varName.first() / varName.index() / varName.count() / varName.last() is supported.
+
+        // Fallback to original varName.property handling (treat as regular path on the item/global context)
         var m = Regex.Match(expr, "^(\\w+)\\.(.+)$");
         if (m.Success)
         {
@@ -479,6 +505,8 @@ public static class SisulaRenderer
         if (token.StartsWith(varName + ".", StringComparison.Ordinal)) inner = token.Substring(varName.Length + 1);
         else if (token.Equals(varName, StringComparison.Ordinal)) inner = string.Empty;
         else inner = token;
+        // If caller passed method-style like first(), strip parentheses to treat as property when resolving against an item
+        if (inner.EndsWith("()", StringComparison.Ordinal)) inner = inner.Substring(0, inner.Length - 2);
         return string.IsNullOrEmpty(inner) ? JsonRead(itemJson, "$") : JsonRead(itemJson, "$." + inner);
     }
 
@@ -547,8 +575,9 @@ public static class SisulaRenderer
         // Tokens: $path.to.value$ or ${path.to.value}$
         // Path grammar: identifier segments separated by dots, each segment may have an optional numeric index [0]
         // Example matches: S_SCHEMA, source.qualified, source.parts[0].name
+        // Accept method-style segments like name.first() in tokens; resolution will strip trailing () for metadata lookup
         text = Regex.Replace(text,
-            @"\$\{?([A-Za-z0-9_]+(?:\[\d+\])?(?:\.[A-Za-z0-9_]+(?:\[\d+\])?)*)\}?\$",
+            @"\$\{?([A-Za-z0-9_]+(?:\[\d+\])?(?:\.[A-Za-z0-9_]+(?:\[\d+\]|\(\))?)*)\}?\$",
             m => ReadPath(ctxJson, loopVars, m.Groups[1].Value),
             RegexOptions.Singleline);
 
@@ -566,6 +595,19 @@ public static class SisulaRenderer
                 {
                     var v = kvp.Key;
                     var itemJson = kvp.Value ?? string.Empty;
+                    // If this kvp is a loop metadata entry like __LOOP__<name>, expose properties as <name>.<prop>
+                    if (v.StartsWith("__LOOP__", StringComparison.Ordinal))
+                    {
+                        var lname = v.Substring(8);
+                        // Support method-style in tokens/expressions: lname.index() or lname.index
+                        var p = path;
+                        if (p.EndsWith("()", StringComparison.Ordinal)) p = p.Substring(0, p.Length - 2);
+                        if (string.Equals(p, lname + ".index", StringComparison.Ordinal)) return JsonRead(itemJson, "$.index");
+                        if (string.Equals(p, lname + ".count", StringComparison.Ordinal)) return JsonRead(itemJson, "$.count");
+                        if (string.Equals(p, lname + ".first", StringComparison.Ordinal)) return JsonRead(itemJson, "$.first");
+                        if (string.Equals(p, lname + ".last", StringComparison.Ordinal)) return JsonRead(itemJson, "$.last");
+                        continue;
+                    }
                     if (string.Equals(path, v, StringComparison.Ordinal))
                     {
                         // Entire item
@@ -573,7 +615,10 @@ public static class SisulaRenderer
                     }
                     if (path.StartsWith(v + ".", StringComparison.Ordinal))
                     {
-                        var inner = "$." + path.Substring(v.Length + 1);
+                        var innerPath = path.Substring(v.Length + 1);
+                        // strip trailing () if present (method form should map to metadata; if not, treat as normal path without ())
+                        if (innerPath.EndsWith("()", StringComparison.Ordinal)) innerPath = innerPath.Substring(0, innerPath.Length - 2);
+                        var inner = "$." + innerPath;
                         return JsonRead(itemJson, inner);
                     }
                 }

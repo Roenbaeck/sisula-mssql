@@ -15,9 +15,9 @@ Features
 - Token expansion:
    - Inline tokens are written as `$path.to.value$` or `${path.to.value}$` and are resolved against the JSON bindings or loop variables.
    - Paths support bracket indexing: `source.parts[0].name`.
-- Loop metadata (`$LOOP`): inside a `foreach` body a special `LOOP` variable is available with JSON fields:
-   - `LOOP.index` (zero-based), `LOOP.count`, `LOOP.first` (boolean), `LOOP.last` (boolean).
-   - `$LOOP` is injected as a JSON value and can be used in tokens and `$/ if` expressions.
+- Loop metadata (per-loop): access loop metadata via the loop variable name.
+   - Use the method form to access loop metadata: `varName.index()`, `varName.count()`, `varName.first()`, `varName.last()` in tokens or expressions.
+   - Only the method form is supported to avoid ambiguity in nested loops and path parsing.
 - Expression language (used by `$/ if` and `foreach where`):
    - Comparison operators: `==, !=, >=, <=, >, <`.
    - Functions: `contains(x,'y')`, `startswith(x,'y')`, `endswith(x,'y')`.
@@ -58,7 +58,7 @@ Templates
 
 - Inline-if example (single-line, follows indentation):
 
-      $/ if LOOP.first -- first column $/ endif
+         $/ if c.first() -- first column $/ endif
 
 - Multi-line if example:
 
