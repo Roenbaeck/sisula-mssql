@@ -9,6 +9,13 @@ using Microsoft.SqlServer.Server;
 
 public static class SisulaRenderer
 {
+    // Precompiled directive regexes (caching for performance)
+    private static readonly Regex ReForeach = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReEndFor = new Regex("^\\s*\\$/\\s*endfor\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReIfInline = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReIf = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReEndIf = new Regex("^\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     [SqlFunction(DataAccess = DataAccessKind.Read, SystemDataAccess = SystemDataAccessKind.Read, IsDeterministic = false, IsPrecise = true)]
     public static SqlString fn_sisulate(SqlString template, SqlString bindingsJson)
     {
@@ -104,12 +111,12 @@ public static class SisulaRenderer
     {
         if (string.IsNullOrEmpty(text)) return string.Empty;
 
-        // Require $/ prefix for all directives
-    var reForeach = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s*$", RegexOptions.IgnoreCase);
-    var reEndFor = new Regex("^\\s*\\$/\\s*endfor\\s*$", RegexOptions.IgnoreCase);
-    var reIfInline = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase);
-    var reIf = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s*$", RegexOptions.IgnoreCase);
-    var reEndIf = new Regex("^\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase); // For future if-blocks
+        // Precompiled regexes handle directive matching (Require $/ prefix for all directives)
+        var reForeach = ReForeach;
+        var reEndFor = ReEndFor;
+        var reIfInline = ReIfInline;
+        var reIf = ReIf;
+        var reEndIf = ReEndIf; // For future if-blocks
 
         var sb = new StringBuilder();
         int pos = 0;
@@ -401,15 +408,15 @@ public static class SisulaRenderer
         {
             var varName = m.Groups[1].Value;
             var rest = m.Groups[2].Value;
-            string itemJson = null;
-            if (loopVars != null && loopVars.ContainsKey(varName)) itemJson = loopVars[varName];
-            // If varName not found in loopVars, fall back to global ctxJson
-            if (itemJson == null) itemJson = ctxJson ?? string.Empty;
-            // Evaluate the rest relative to varName
-            return EvalConditionOnItem(itemJson, varName, rest);
+            // Only treat leading identifier as loop variable if actually present (or metadata)
+            bool isLoopVar = loopVars != null && (loopVars.ContainsKey(varName) || loopVars.ContainsKey("__LOOP__" + varName));
+            if (isLoopVar)
+            {
+                string itemJson = loopVars[varName];
+                return EvalConditionOnItem(itemJson, varName, rest);
+            }
+            // Otherwise evaluate entire expression against global context
         }
-
-        // No var prefix; evaluate as global (pass empty varName to have ResolvePathValue treat paths as global)
         return EvalConditionOnItem(ctxJson, string.Empty, expr);
     }
 
@@ -430,7 +437,9 @@ public static class SisulaRenderer
         var s = v.Trim();
         if (s.Length == 0) return false;
         if (string.Equals(s, "false", StringComparison.OrdinalIgnoreCase)) return false;
-        if (s == "0") return false;
+        // Numeric zero (including formats like 0.0, 0e0) treated as false
+        double num;
+        if (TryParseDoubleInvariant(s, out num) && num == 0d) return false;
         if (string.Equals(s, "null", StringComparison.OrdinalIgnoreCase)) return false;
         return true;
     }
@@ -574,10 +583,10 @@ public static class SisulaRenderer
     {
         // Tokens: $path.to.value$ or ${path.to.value}$
         // Path grammar: identifier segments separated by dots, each segment may have an optional numeric index [0]
-        // Example matches: S_SCHEMA, source.qualified, source.parts[0].name
-        // Accept method-style segments like name.first() in tokens; resolution will strip trailing () for metadata lookup
+        // Example matches: S_SCHEMA, source.qualified, source.parts[0].name, part.index()
+        // Method-style () only allowed at the end (metadata); intermediate segments cannot have ()
         text = Regex.Replace(text,
-            @"\$\{?([A-Za-z0-9_]+(?:\[\d+\])?(?:\.[A-Za-z0-9_]+(?:\[\d+\]|\(\))?)*)\}?\$",
+            @"\$\{?([A-Za-z0-9_]+(?:\[\d+\])?(?:\.[A-Za-z0-9_]+(?:\[\d+\])?)*(?:\(\))?)\}?\$",
             m => ReadPath(ctxJson, loopVars, m.Groups[1].Value),
             RegexOptions.Singleline);
 

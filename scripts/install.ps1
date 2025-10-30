@@ -1,6 +1,6 @@
 param(
-  [Parameter(Mandatory=$true)] [string]$Server,
-  [Parameter(Mandatory=$true)] [string]$Database,
+  [string]$Server,
+  [string]$Database,
   [switch]$RegisterTrustedAssembly = $false,
   [string]$TrustedAssemblyDescription = 'SisulaRenderer',
   [switch]$PruneTrustedAssemblies = $false,
@@ -11,7 +11,9 @@ param(
   [ValidateSet('SAFE','EXTERNAL_ACCESS','UNSAFE')] [string]$PermissionSet = 'SAFE',
   [switch]$Recreate = $true,
   [switch]$InstallTemplates = $false,
-  [string]$TemplatesPath
+  [string]$TemplatesPath,
+  [switch]$GenerateSql = $false,
+  [string]$OutputSql = 'install.sql'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -106,12 +108,61 @@ if (!(Test-Path $DllPath)) { throw "Assembly not found: $DllPath. Build first (s
 # Read DLL and produce hex literal 0x....
 $bytes = [System.IO.File]::ReadAllBytes($DllPath)
 $hex = '0x' + ([System.BitConverter]::ToString($bytes).Replace('-', ''))
+if ($GenerateSql) {
+  Write-Host "Generating pure-SQL install script: $OutputSql"
+  $hashHex = (Get-FileHash -Algorithm SHA512 -Path $DllPath).Hash.ToLowerInvariant()
+  $targetDb = if ($Database) { $Database } else { 'YourDatabaseName' }
+  $utcNow = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+  $sqlContent = @"
+-- Auto-generated SisulaRenderer installation script
+-- Date UTC: $utcNow
+-- Target Database placeholder: $targetDb (edit if needed)
+-- Assembly Permission Set: $PermissionSet
+-- Trusted Assembly Description: $TrustedAssemblyDescription
+-- SHA-512 Hash: $hashHex
+-- Hex length: $($hex.Length - 2) bytes (raw DLL size: $($bytes.Length) bytes)
+-- Prerequisites: CLR enabled; strict security ON; run master batch to trust assembly.
+
+/* 1) (Optional) Register trusted assembly in master */
+USE [master];
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.trusted_assemblies WHERE [hash] = 0x$hashHex)
+BEGIN
+  EXEC sys.sp_add_trusted_assembly @hash = 0x$hashHex, @description = N'$TrustedAssemblyDescription';
+END
+GO
+
+/* 2) Create / recreate assembly + function in target DB */
+USE [$targetDb];
+GO
+IF OBJECT_ID(N'dbo.fn_sisulate') IS NOT NULL
+  DROP FUNCTION dbo.fn_sisulate;
+GO
+IF EXISTS (SELECT 1 FROM sys.assemblies WHERE name = N'SisulaRenderer')
+  DROP ASSEMBLY [SisulaRenderer];
+GO
+CREATE ASSEMBLY [SisulaRenderer]
+FROM $hex
+WITH PERMISSION_SET = $PermissionSet;
+GO
+CREATE FUNCTION dbo.fn_sisulate(@template nvarchar(max), @bindings nvarchar(max))
+RETURNS nvarchar(max)
+AS EXTERNAL NAME [SisulaRenderer].[SisulaRenderer].[fn_sisulate];
+GO
+"@
+  [System.IO.File]::WriteAllText((Join-Path $RepoRoot $OutputSql), $sqlContent, [System.Text.Encoding]::UTF8)
+  Write-Host "Wrote: $(Join-Path $RepoRoot $OutputSql)" -ForegroundColor Green
+  Write-Host "Pure-SQL generation only (no live install attempted)." -ForegroundColor Cyan
+  return
+}
 
 # Connections
 $csMaster = New-ConnectionString -server $Server -db 'master'
 $csDb = New-ConnectionString -server $Server -db $Database
 
+if (-not $Server -or -not $Database) { throw "Provide -Server and -Database unless using -GenerateSql." }
 Write-Host "Installing SisulaRenderer to $Server/$Database with $PermissionSet (strict security expected ON)"
+Write-Host ("Assembly hex length: {0} chars (~{1} bytes)" -f $hex.Length, $bytes.Length) -ForegroundColor DarkGray
 
 if ($RegisterTrustedAssembly) {
   Write-Host "Registering trusted assembly (SHA-512) in master..."
