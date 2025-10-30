@@ -32,6 +32,7 @@ JSON binding and resolution
 - Bindings are passed as a single JSON document to `fn_sisulate(template, bindingsJson)`.
 - Resolution uses SQL Server JSON functions: `JSON_VALUE`, `JSON_QUERY`, and `OPENJSON`. No third-party JSON libraries are used.
 - `foreach` uses `OPENJSON` to enumerate arrays; `JsonRead` uses `JSON_VALUE` then `JSON_QUERY` for scalar/complex reads.
+- Scalar tokens are limited to NVARCHAR(4000) when read via `JSON_VALUE`.
 
 Authoring and installing templates
 - Author templates as `.sql` files under `templates/` to get proper SQL syntax highlighting in SSMS/VS Code.
@@ -59,12 +60,17 @@ Foreach example with where:
     $/ endfor
     ~*/
 
-Nested foreach example:
+Nested foreach example with loop metadata:
 
     /*~
     $/ foreach table in source.tables
+    $/ if t.first()
+    -- First table comment
+    $/ endif
     $/ foreach col in table.columns
+    $/ if c.last()
     ALTER TABLE [$S_SCHEMA$].[$table.name$] ADD [$col.name$] $col.type$;
+    $/ endif
     $/ endfor
     $/ endfor
     ~*/
@@ -73,11 +79,21 @@ Inline-if example (single-line, follows indentation):
 
         $/ if c.first() -- first column $/ endif
 
-Multi-line if example:
+Multi-line if example with truthy check:
 
-    $/ if S_SCHEMA == 'dbo'
-    -- do dbo specific logic
+    $/ if source.enabled
+    -- Enable feature
     $/ endif
 
-Notes
-- Scalar tokens are limited to NVARCHAR(4000) when read via `JSON_VALUE`.
+Multi-line if example with function:
+
+    $/ if contains(table.name, 'temp')
+    -- Temporary table logic
+    $/ endif
+
+Multi-line if example with comparison:
+
+    $/ if table.priority > 5
+    -- High priority table
+    $/ endif
+
