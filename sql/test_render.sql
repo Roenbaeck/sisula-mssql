@@ -14,9 +14,22 @@ SET NOCOUNT ON;
 DECLARE @template nvarchar(max) = N'
 -- ===== Test template =====
 -- Header
-/*~
 -- Generated: $VARIABLES.GENERATED_AT$
 -- By: $VARIABLES.USERNAME$ on $VARIABLES.COMPUTERNAME$ ($VARIABLES.USERDOMAIN$)
+$/ if VARIABLES.MYINTEGER == 1
+-- My Integer is $VARIABLES.MYINTEGER$
+$/ endif
+$/ if VARIABLES.MYINTEGER == 2
+-- This comment is not displayed
+$/ endif
+$/ if VARIABLES.MYLETTER == "A"
+-- My Letter is $VARIABLES.MYLETTER$
+$/ endif
+$/ if VARIABLES.MYLETTER == "B"
+-- This comment is not displayed
+$/ endif
+-- Svenska tecken: $VARIABLES.ÅÄÖ$
+IF (1 > 1) PRINT ''Not likely''
 CREATE PROCEDURE [$SCHEMA$].[$SOURCE$_CreateTypedTables] AS
 BEGIN
     SET NOCOUNT ON;
@@ -24,26 +37,23 @@ BEGIN
 	$/ foreach t in tables
 	-- Create: $t.table$_Staging
 	CREATE TABLE [$SCHEMA$].[$t.table$_Staging] (
-  $- loop over all columns for this table
-	  $/ foreach c in t.columns order by c.ordinal 
-    $- per-column start
-  [$c.name$] $c.type$$/ if c.last() -- last column marker $/ endif $- sisula inline comment -$
-    -- column number $c.index()$ (ordinal $c.ordinal$)
-    $/ if c.first() 
-    -- that was the first column
-    $/ endif
+		$- loop over some variables
+		$-
+		$/ foreach c in t.columns where c.ordinal > 1 order by c.ordinal 
+		$/ if c.last() 
+		-- here comes the last column
+		$/ endif
+		[$c.name$] $c.type$,$/ if c.ordinal -- $c.ordinal$ $/ endif		
+		$/ if c.first() 
+		-- that was the first column
+		$/ endif
 		$/ endfor
+		$-
 		[created_at] datetime2 not null default ''$TIMESTAMP$''
 	);
+
 	$/ endfor
-~*/
-  $/ if VARIABLES.MYINTEGER == 1
-  -- Sample integer check: $VARIABLES.MYINTEGER$
-  $/ endif
-  $/ if VARIABLES.MYLETTER == "A"
-  -- Sample letter check: $VARIABLES.MYLETTER$
-  $/ endif
-  -- Svenska tecken: $VARIABLES.ÅÄÖ$
+
 	-- The End
 END
 GO
@@ -638,6 +648,6 @@ DECLARE @bindings nvarchar(max) = N'
 DECLARE @rendered nvarchar(max) = dbo.fn_sisulate(@template, @bindings);
 
 -- Inspect output
-SELECT @rendered FOR XML PATH('');
+SELECT cast('<?generated -- ' + @rendered + ' --?>' as XML);
 
 END -- end of proc
