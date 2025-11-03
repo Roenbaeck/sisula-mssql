@@ -39,6 +39,7 @@ BEGIN
 	$/ foreach t in tables
 	-- Create: $t.table$_Staging
 	-- Number of tables: $t.count()$
+	-- First column name is $t.columns[0].name$
 	CREATE TABLE [$SCHEMA$].[$t.table$_Staging] (
 		$- loop over some variables
 		$-
@@ -52,6 +53,8 @@ BEGIN
 		$/ endif
 		$/ endfor
 		$-
+		-- $/ foreach c in t.columns C:$c.index()$ $/ endfor
+		-- $/ foreach c in t.columns $/ if c.index() == 10 Index $c.index()$ found $/ endif $/ endfor
 		[created_at] datetime2 not null default ''$TIMESTAMP$''
 	);
 

@@ -14,6 +14,7 @@ Line directives
   - Iterates over a JSON array found at `<path>` (supports loop variable scoping and nesting).
   - Optional `where` filters items using the same expression language as `$/ if`.
   - Optional `order by` supports numeric-aware sorting and an optional `desc` flag.
+    - Inline form: `$/ foreach <var> in <path> <content> $/ endfor` — repeats `<content>` for each item (content is evaluated with the loop variable in scope and supports inline-if tokens).
 - If:
   - Block form: `$/ if <condition>` ... `$/ endif` — conditional rendering of blocks.
   - Single-line form (inline-if): `$/ if <cond> <content> $/ endif` — renders `<content>` inline when `<cond>` is true. The inline content respects the indentation where the directive appears.
@@ -94,6 +95,10 @@ Inline-if example (single-line, follows indentation):
 Inline-if embedded within a line (e.g., mark the last column):
 
     [$c.name$] $c.type$$/ if c.last() -- last column marker $/ endif $- inline sisula comment -$
+
+Inline foreach example (single-line):
+
+    $/ foreach col in table.columns $col.name$, $/ endfor
 
 Multi-line if example with truthy check:
 

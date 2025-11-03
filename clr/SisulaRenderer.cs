@@ -11,13 +11,15 @@ public static class SisulaRenderer
 {
     // Precompiled directive regexes (caching for performance)
     private static readonly Regex ReForeach = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReForeachInline = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endfor\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReForeachInlineEmbedded = new Regex("\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endfor", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReEndFor = new Regex("^\\s*\\$/\\s*endfor\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ReIfInline = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ReIfInlineEmbedded = new Regex("\\$/\\s*if\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endif", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReIfInline = new Regex("^\\s*\\$/\\s*if\\s+(.*?)\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex ReIfInlineEmbedded = new Regex("\\$/\\s*if\\s+(.*?)\\s*\\$/\\s*endif", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex ReIf = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReEndIf = new Regex("^\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        private static readonly Regex ReCommentLine = new Regex("^\\s*\\$-.*$", RegexOptions.Compiled);
-        private static readonly Regex ReInlineComment = new Regex("\\$-.*?-\\$", RegexOptions.Compiled);
+    private static readonly Regex ReCommentLine = new Regex("^\\s*\\$-.*$", RegexOptions.Compiled);
+    private static readonly Regex ReInlineComment = new Regex("\\$-.*?-\\$", RegexOptions.Compiled);
 
     [SqlFunction(DataAccess = DataAccessKind.Read, SystemDataAccess = SystemDataAccessKind.Read, IsDeterministic = false, IsPrecise = true)]
     public static SqlString fn_sisulate(SqlString template, SqlString bindingsJson)
@@ -116,6 +118,8 @@ public static class SisulaRenderer
 
         // Precompiled regexes handle directive matching (Require $/ prefix for all directives)
     var reForeach = ReForeach;
+    var reForeachInline = ReForeachInline;
+    var reForeachInlineEmbedded = ReForeachInlineEmbedded;
     var reEndFor = ReEndFor;
     var reIfInline = ReIfInline;
     var reIfInlineEmbedded = ReIfInlineEmbedded;
@@ -144,6 +148,16 @@ public static class SisulaRenderer
             }
 
             line = reInlineComment.Replace(line, string.Empty);
+
+            var mForInline = reForeachInline.Match(line);
+            if (mForInline.Success)
+            {
+                pos = hasNewline ? (lineEnd + 1) : text.Length;
+                var rendered = RenderInlineForeachMatch(mForInline, ctxJson, loopVars, reForeachInlineEmbedded, reIfInlineEmbedded);
+                sb.Append(rendered);
+                if (hasNewline) sb.Append('\n');
+                continue;
+            }
 
             var mFor = reForeach.Match(line);
             if (mFor.Success)
@@ -177,33 +191,7 @@ public static class SisulaRenderer
                 string path, whereExpr, orderPath; bool orderDesc;
                 ParseForeachSpec(spec, out path, out whereExpr, out orderPath, out orderDesc);
 
-                var items = new List<string>(EnumerateJsonArray(ctxJson, path, loopVars));
-                // Filter
-                if (!string.IsNullOrEmpty(whereExpr))
-                {
-                    var filtered = new List<string>(items.Count);
-                    foreach (var it in items)
-                    {
-                        if (EvalConditionOnItem(it, varName, whereExpr)) filtered.Add(it);
-                    }
-                    items = filtered;
-                }
-                // Sort
-                if (!string.IsNullOrEmpty(orderPath))
-                {
-                    items.Sort((a, b) => {
-                        var ka = GetOrderKey(a, varName, orderPath);
-                        var kb = GetOrderKey(b, varName, orderPath);
-                        int cmp;
-                        double da, db;
-                        if (ka == null && kb == null) cmp = 0;
-                        else if (ka == null) cmp = 1;
-                        else if (kb == null) cmp = -1;
-                        else if (TryParseDoubleInvariant(ka, out da) && TryParseDoubleInvariant(kb, out db)) cmp = da.CompareTo(db);
-                        else cmp = string.Compare(ka, kb, StringComparison.OrdinalIgnoreCase);
-                        return orderDesc ? -cmp : cmp;
-                    });
-                }
+                var items = PrepareForeachItems(ctxJson, loopVars, path, whereExpr, orderPath, orderDesc, varName);
 
                 int n = items.Count;
                 for (int i = 0; i < n; i++)
@@ -239,8 +227,8 @@ public static class SisulaRenderer
             var mIfInline = reIfInline.Match(line);
             if (mIfInline.Success)
             {
-                var condition = mIfInline.Groups[1].Value.Trim();
-                var content = mIfInline.Groups[2].Value;
+                string condition, content;
+                SplitInlineIfBody(mIfInline.Groups[1].Value, out condition, out content);
                 bool condResult = EvalConditionInContext(condition, ctxJson, loopVars);
                 if (condResult)
                 {
@@ -289,6 +277,10 @@ public static class SisulaRenderer
             }
 
             // Content line: expand tokens inline and preserve newline
+            if (reForeachInlineEmbedded.IsMatch(line))
+            {
+                line = ExpandInlineForeach(line, ctxJson, loopVars, reForeachInlineEmbedded, reIfInlineEmbedded);
+            }
             if (reIfInlineEmbedded.IsMatch(line))
             {
                 line = ExpandInlineIfs(line, ctxJson, loopVars, reIfInlineEmbedded);
@@ -339,8 +331,40 @@ public static class SisulaRenderer
         }
     }
 
+    private static List<string> PrepareForeachItems(string ctxJson, Dictionary<string, string> loopVars,
+        string path, string whereExpr, string orderPath, bool orderDesc, string varName)
+    {
+        var items = new List<string>(EnumerateJsonArray(ctxJson, path, loopVars));
+        if (!string.IsNullOrEmpty(whereExpr))
+        {
+            var filtered = new List<string>(items.Count);
+            foreach (var it in items)
+            {
+                if (EvalConditionOnItem(it, varName, whereExpr, loopVars)) filtered.Add(it);
+            }
+            items = filtered;
+        }
+        if (!string.IsNullOrEmpty(orderPath))
+        {
+            items.Sort((a, b) =>
+            {
+                var ka = GetOrderKey(a, varName, orderPath);
+                var kb = GetOrderKey(b, varName, orderPath);
+                int cmp;
+                double da, db;
+                if (ka == null && kb == null) cmp = 0;
+                else if (ka == null) cmp = 1;
+                else if (kb == null) cmp = -1;
+                else if (TryParseDoubleInvariant(ka, out da) && TryParseDoubleInvariant(kb, out db)) cmp = da.CompareTo(db);
+                else cmp = string.Compare(ka, kb, StringComparison.OrdinalIgnoreCase);
+                return orderDesc ? -cmp : cmp;
+            });
+        }
+        return items;
+    }
+
     // Reusable: evaluate a simple boolean expression on an item (for foreach where; later for if)
-    private static bool EvalConditionOnItem(string itemJson, string varName, string expr)
+    private static bool EvalConditionOnItem(string itemJson, string varName, string expr, Dictionary<string, string> loopVars)
     {
         if (string.IsNullOrWhiteSpace(expr)) return true;
         expr = expr.Trim();
@@ -354,8 +378,8 @@ public static class SisulaRenderer
             var args = SplitArgs(argSpan);
             if (args.Length >= 2)
             {
-                var left = ResolveOperand(args[0], itemJson, varName);
-                var right = ResolveOperand(args[1], itemJson, varName);
+                var left = ResolveOperand(args[0], itemJson, varName, loopVars);
+                var right = ResolveOperand(args[1], itemJson, varName, loopVars);
                 var ls = ToStringOrNull(left);
                 var rs = ToStringOrNull(right);
                 if (ls == null || rs == null) return false;
@@ -380,12 +404,15 @@ public static class SisulaRenderer
         {
             var left = expr.Substring(0, idx).Trim();
             var right = expr.Substring(idx + op.Length).Trim();
-            var lv = ResolveOperand(left, itemJson, varName);
-            var rv = ResolveOperand(right, itemJson, varName);
+            var lv = ResolveOperand(left, itemJson, varName, loopVars);
+            var rv = ResolveOperand(right, itemJson, varName, loopVars);
             return CompareOperands(lv, rv, op);
         }
 
-        // Fallback: truthy check on a path (relative to varName)
+        // Fallback: truthy check on metadata or path (relative to varName)
+        var metaCheck = TryResolveLoopMetadata(loopVars, expr, varName);
+        if (metaCheck != null) return Truthy(metaCheck);
+
         var val = ResolvePathValue(expr, itemJson, varName);
         return Truthy(val);
     }
@@ -435,11 +462,11 @@ public static class SisulaRenderer
             if (isLoopVar)
             {
                 string itemJson = loopVars[varName];
-                return EvalConditionOnItem(itemJson, varName, rest);
+                return EvalConditionOnItem(itemJson, varName, rest, loopVars);
             }
             // Otherwise evaluate entire expression against global context
         }
-        return EvalConditionOnItem(ctxJson, string.Empty, expr);
+        return EvalConditionOnItem(ctxJson, string.Empty, expr, loopVars);
     }
 
 
@@ -511,7 +538,7 @@ public static class SisulaRenderer
         return parts.ToArray();
     }
 
-    private static object ResolveOperand(string token, string itemJson, string varName)
+    private static object ResolveOperand(string token, string itemJson, string varName, Dictionary<string, string> loopVars)
     {
         if (string.IsNullOrWhiteSpace(token)) return null;
         token = token.Trim();
@@ -535,6 +562,13 @@ public static class SisulaRenderer
         // number
         double d;
         if (TryParseDoubleInvariant(token, out d)) return d;
+        // Otherwise: metadata or path reference
+        var metaVal = TryResolveLoopMetadata(loopVars, token, varName);
+        if (metaVal != null)
+        {
+            return ConvertLoopMetadataValue(metaVal);
+        }
+
         // Otherwise: treat as path relative to varName
         var s = ResolvePathValue(token, itemJson, varName);
         // If path yields numeric, return double
@@ -627,10 +661,154 @@ public static class SisulaRenderer
         if (string.IsNullOrEmpty(line)) return line;
         return matcher.Replace(line, m =>
         {
-            var condition = m.Groups[1].Value.Trim();
-            var content = m.Groups[2].Value;
+            string condition, content;
+            SplitInlineIfBody(m.Groups[1].Value, out condition, out content);
             return EvalConditionInContext(condition, ctxJson, loopVars) ? content : string.Empty;
         });
+    }
+
+    // Split an inline-if directive into expression and following content while preserving user spacing.
+    private static void SplitInlineIfBody(string body, out string condition, out string content)
+    {
+        condition = string.Empty;
+        content = string.Empty;
+        if (body == null) return;
+
+        var span = body;
+        int len = span.Length;
+        int i = 0;
+        while (i < len && char.IsWhiteSpace(span[i])) i++;
+        int start = i;
+        bool inString = false; char quote = '\0';
+        int parenDepth = 0;
+
+        while (i < len)
+        {
+            char ch = span[i];
+            if (inString)
+            {
+                if (ch == quote)
+                {
+                    if (i + 1 < len && span[i + 1] == quote)
+                    {
+                        i++; // skip escaped quote
+                    }
+                    else
+                    {
+                        inString = false;
+                    }
+                }
+            }
+            else
+            {
+                if (ch == '\'' || ch == '"')
+                {
+                    inString = true;
+                    quote = ch;
+                }
+                else if (ch == '(')
+                {
+                    parenDepth++;
+                }
+                else if (ch == ')')
+                {
+                    if (parenDepth > 0) parenDepth--;
+                }
+                else if (char.IsWhiteSpace(ch) && parenDepth == 0)
+                {
+                    int j = i;
+                    while (j < len && char.IsWhiteSpace(span[j])) j++;
+                    if (j >= len) break;
+
+                    int prev = i - 1;
+                    while (prev >= start && char.IsWhiteSpace(span[prev])) prev--;
+                    if (prev >= start && IsBinaryOperatorChar(span[prev]))
+                    {
+                        i = j;
+                        continue;
+                    }
+
+                    if (StartsWithBinaryOperator(span, j))
+                    {
+                        i = j;
+                        continue;
+                    }
+
+                    condition = span.Substring(start, i - start).Trim();
+                    content = span.Substring(i);
+                    return;
+                }
+            }
+            i++;
+        }
+
+        condition = span.Substring(start, i - start).Trim();
+    content = i < len ? span.Substring(i) : string.Empty;
+    }
+
+    private static bool StartsWithBinaryOperator(string text, int index)
+    {
+        if (index >= text.Length) return false;
+        switch (text[index])
+        {
+            case '=':
+                return index + 1 < text.Length && text[index + 1] == '=';
+            case '!':
+                return index + 1 < text.Length && text[index + 1] == '=';
+            case '>':
+                return true;
+            case '<':
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool IsBinaryOperatorChar(char ch)
+    {
+        return ch == '=' || ch == '!' || ch == '>' || ch == '<';
+    }
+
+    private static string ExpandInlineForeach(string text, string ctxJson, Dictionary<string, string> loopVars, Regex matcher, Regex reIfInlineEmbedded)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        return matcher.Replace(text, m => RenderInlineForeachMatch(m, ctxJson, loopVars, matcher, reIfInlineEmbedded));
+    }
+
+    private static string RenderInlineForeachMatch(Match match, string ctxJson, Dictionary<string, string> loopVars, Regex matcher, Regex reIfInlineEmbedded)
+    {
+        var varName = match.Groups[1].Value;
+        var spec = match.Groups[2].Value.Trim();
+        var inlineBody = match.Groups[3].Value;
+
+        string pathInline, whereInline, orderInline;
+        bool orderDescInline;
+        ParseForeachSpec(spec, out pathInline, out whereInline, out orderInline, out orderDescInline);
+
+        var itemsInline = PrepareForeachItems(ctxJson, loopVars, pathInline, whereInline, orderInline, orderDescInline, varName);
+        if (itemsInline.Count == 0) return string.Empty;
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < itemsInline.Count; i++)
+        {
+            var itemJson = itemsInline[i];
+            var childVars = loopVars != null
+                ? new Dictionary<string, string>(loopVars)
+                : new Dictionary<string, string>();
+            childVars[varName] = itemJson;
+            var loopJson = string.Format("{{\"index\":{0},\"count\":{1},\"first\":{2},\"last\":{3}}}",
+                i, itemsInline.Count, (i == 0 ? "true" : "false"), (i == itemsInline.Count - 1 ? "true" : "false"));
+            childVars["__LOOP__" + varName] = loopJson;
+
+            var iterationContent = inlineBody;
+            if (reIfInlineEmbedded.IsMatch(iterationContent))
+            {
+                iterationContent = ExpandInlineIfs(iterationContent, ctxJson, childVars, reIfInlineEmbedded);
+            }
+            iterationContent = ExpandInlineForeach(iterationContent, ctxJson, childVars, matcher, reIfInlineEmbedded);
+            sb.Append(RenderInline(iterationContent, ctxJson, childVars));
+        }
+        return sb.ToString();
     }
 
     private static string RenderInline(string text, string ctxJson, Dictionary<string, string> loopVars)
@@ -795,6 +973,31 @@ public static class SisulaRenderer
             }
         }
         return sb.ToString();
+    }
+
+    private static string TryResolveLoopMetadata(Dictionary<string, string> loopVars, string token, string currentVar)
+    {
+        if (loopVars == null || string.IsNullOrEmpty(token)) return null;
+        // Attempt exact match first (token already includes variable name)
+        var meta = ResolveLoopMetadataToken(loopVars, token);
+        if (meta != null) return meta;
+        if (!string.IsNullOrEmpty(currentVar) && !token.StartsWith(currentVar + ".", StringComparison.Ordinal))
+        {
+            meta = ResolveLoopMetadataToken(loopVars, currentVar + "." + token);
+            if (meta != null) return meta;
+        }
+        return null;
+    }
+
+    private static object ConvertLoopMetadataValue(string raw)
+    {
+        if (raw == null) return null;
+        double d;
+        if (TryParseDoubleInvariant(raw, out d)) return d;
+        if (string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase)) return true;
+        if (string.Equals(raw, "false", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.Equals(raw, "null", StringComparison.OrdinalIgnoreCase)) return null;
+        return raw;
     }
 
     private static string ResolveLoopMetadataToken(Dictionary<string, string> loopVars, string path)
