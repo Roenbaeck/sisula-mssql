@@ -24,8 +24,11 @@ BEGIN
 	$/ foreach t in tables
 	-- Create: $t.table$_Staging
 	CREATE TABLE [$SCHEMA$].[$t.table$_Staging] (
+  $- loop over all columns for this table
 	  $/ foreach c in t.columns order by c.ordinal 
-    [$c.name$] $c.type$, -- column number $c.index$ (ordinal $c.ordinal$)
+    $- per-column start
+  [$c.name$] $c.type$$/ if c.last() -- last column marker $/ endif $- sisula inline comment -$
+    -- column number $c.index()$ (ordinal $c.ordinal$)
     $/ if c.first() 
     -- that was the first column
     $/ endif
@@ -34,6 +37,13 @@ BEGIN
 	);
 	$/ endfor
 ~*/
+  $/ if VARIABLES.MYINTEGER == 1
+  -- Sample integer check: $VARIABLES.MYINTEGER$
+  $/ endif
+  $/ if VARIABLES.MYLETTER == "A"
+  -- Sample letter check: $VARIABLES.MYLETTER$
+  $/ endif
+  -- Svenska tecken: $VARIABLES.ÅÄÖ$
 	-- The End
 END
 GO
@@ -54,7 +64,10 @@ DECLARE @bindings nvarchar(max) = N'
     "GENERATED_AT": "' + @generated_at + N'",
     "USERNAME": "' + STRING_ESCAPE(@username, 'json') + N'",
     "COMPUTERNAME": "' + STRING_ESCAPE(@servername, 'json') + N'",
-    "USERDOMAIN": "' + STRING_ESCAPE(@dbname, 'json') + N'"
+    "USERDOMAIN": "' + STRING_ESCAPE(@dbname, 'json') + N'",
+    "MYINTEGER": 1,
+    "MYLETTER": "A",
+    "ÅÄÖ": "åäö"
   },
   "TIMESTAMP": "' + @timestamp + N'",
   "tables": [

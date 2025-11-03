@@ -5,6 +5,7 @@ This document describes the small Sisula-like template language implemented by t
 Blocks and tokens
 - Template blocks are delimited by `/*~ ... ~*/`. Everything outside blocks is passed through unchanged. If a template has no `/*~ ... ~*/` delimiters, the entire template is treated as a Sisula script (tokens + line directives).
 - Tokens are written as `$path.to.value$` or `${path.to.value}$` and support bracket indexing (e.g. `source.parts[0].name`). Token values are resolved against the JSON bindings or loop variables.
+- Path segments may use Unicode letters (e.g. `$VARIABLES.ÅÄÖ$`); they are quoted appropriately in JSON queries.
 
 Line directives
 - All line directives require the `$/` prefix.
@@ -16,6 +17,12 @@ Line directives
 - If:
   - Block form: `$/ if <condition>` ... `$/ endif` — conditional rendering of blocks.
   - Single-line form (inline-if): `$/ if <cond> <content> $/ endif` — renders `<content>` inline when `<cond>` is true. The inline content respects the indentation where the directive appears.
+    - Inline-if directives can also appear inside a content line to add or remove inline fragments (useful for trailing commas or comments that depend on metadata).
+
+Comments
+- Line comments: start a line with `$-` (optionally indented) to remove it from the rendered output.
+- Inline comments: wrap comment text as `$- ... -$` to drop the span while keeping the surrounding content.
+- Comments are stripped before token or directive evaluation.
 
 Loop metadata
 - Each `foreach` injects per-loop metadata that's accessible by the loop variable name via method calls.
@@ -24,7 +31,9 @@ Loop metadata
 
 Expression language
 - Comparison operators: `==, !=, >=, <=, >, <`.
-- Functions: `contains(x,'y')`, `startswith(x,'y')`, `endswith(x,'y')`.
+- Functions: `contains(x,"y")`, `startswith(x,"y")`, `endswith(x,"y")`.
+- String literals use double quotes (`"value"`). Escape a double quote inside a literal with `""`.
+- Single-quoted literals are not supported (use double quotes exclusively).
 - Truthy checks on paths: null/empty/false/"0"/"null" are falsey.
 - Expressions are used by `$/ if` and `foreach where`.
 
@@ -55,7 +64,7 @@ Foreach example with order by:
 Foreach example with where:
 
     /*~
-    $/ foreach part in source.parts where part.type == 'table'
+    $/ foreach part in source.parts where part.type == "table"
     DROP TABLE [$S_SCHEMA$].[$part.name$];
     $/ endfor
     ~*/
@@ -64,10 +73,12 @@ Nested foreach example with loop metadata:
 
     /*~
     $/ foreach table in source.tables
+    $- loop over tables
     $/ if t.first()
     -- First table comment
     $/ endif
     $/ foreach col in table.columns
+    $- loop over columns
     $/ if c.last()
     ALTER TABLE [$S_SCHEMA$].[$table.name$] ADD [$col.name$] $col.type$;
     $/ endif
@@ -79,6 +90,10 @@ Inline-if example (single-line, follows indentation):
 
         $/ if c.first() -- first column $/ endif
 
+Inline-if embedded within a line (e.g., mark the last column):
+
+    [$c.name$] $c.type$$/ if c.last() -- last column marker $/ endif $- inline sisula comment -$
+
 Multi-line if example with truthy check:
 
     $/ if source.enabled
@@ -87,7 +102,7 @@ Multi-line if example with truthy check:
 
 Multi-line if example with function:
 
-    $/ if contains(table.name, 'temp')
+    $/ if contains(table.name, "temp")
     -- Temporary table logic
     $/ endif
 

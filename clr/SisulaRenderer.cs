@@ -13,8 +13,11 @@ public static class SisulaRenderer
     private static readonly Regex ReForeach = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReEndFor = new Regex("^\\s*\\$/\\s*endfor\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReIfInline = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReIfInlineEmbedded = new Regex("\\$/\\s*if\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endif", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReIf = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReEndIf = new Regex("^\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex ReCommentLine = new Regex("^\\s*\\$-.*$", RegexOptions.Compiled);
+        private static readonly Regex ReInlineComment = new Regex("\\$-.*?-\\$", RegexOptions.Compiled);
 
     [SqlFunction(DataAccess = DataAccessKind.Read, SystemDataAccess = SystemDataAccessKind.Read, IsDeterministic = false, IsPrecise = true)]
     public static SqlString fn_sisulate(SqlString template, SqlString bindingsJson)
@@ -112,11 +115,14 @@ public static class SisulaRenderer
         if (string.IsNullOrEmpty(text)) return string.Empty;
 
         // Precompiled regexes handle directive matching (Require $/ prefix for all directives)
-        var reForeach = ReForeach;
-        var reEndFor = ReEndFor;
-        var reIfInline = ReIfInline;
-        var reIf = ReIf;
-        var reEndIf = ReEndIf; // For future if-blocks
+    var reForeach = ReForeach;
+    var reEndFor = ReEndFor;
+    var reIfInline = ReIfInline;
+    var reIfInlineEmbedded = ReIfInlineEmbedded;
+    var reIf = ReIf;
+    var reEndIf = ReEndIf; // For future if-blocks
+    var reCommentLine = ReCommentLine;
+    var reInlineComment = ReInlineComment;
 
         var sb = new StringBuilder();
         int pos = 0;
@@ -130,6 +136,14 @@ public static class SisulaRenderer
             int lineStopTrim = lineStop;
             if (lineStopTrim > pos && text[lineStopTrim - 1] == '\r') lineStopTrim--;
             var line = text.Substring(pos, lineStopTrim - pos);
+
+            if (reCommentLine.IsMatch(line))
+            {
+                pos = hasNewline ? (lineEnd + 1) : text.Length;
+                continue;
+            }
+
+            line = reInlineComment.Replace(line, string.Empty);
 
             var mFor = reForeach.Match(line);
             if (mFor.Success)
@@ -275,7 +289,15 @@ public static class SisulaRenderer
             }
 
             // Content line: expand tokens inline and preserve newline
-            sb.Append(RenderInline(line, ctxJson, loopVars));
+            if (reIfInlineEmbedded.IsMatch(line))
+            {
+                line = ExpandInlineIfs(line, ctxJson, loopVars, reIfInlineEmbedded);
+            }
+            // If line became empty after removing inline comments, skip emitting content but keep newline if present
+            if (line.Trim().Length > 0)
+            {
+                sb.Append(RenderInline(line, ctxJson, loopVars));
+            }
             if (hasNewline) sb.Append('\n');
             pos = hasNewline ? (lineEnd + 1) : text.Length;
         }
@@ -428,7 +450,7 @@ public static class SisulaRenderer
         if (orderPath.StartsWith(varName + ".", StringComparison.Ordinal)) inner = orderPath.Substring(varName.Length + 1);
         else if (orderPath.Equals(varName, StringComparison.Ordinal)) inner = string.Empty;
         else inner = orderPath;
-        return string.IsNullOrEmpty(inner) ? JsonRead(itemJson, "$") : JsonRead(itemJson, "$." + inner);
+    return string.IsNullOrEmpty(inner) ? JsonRead(itemJson, "$") : JsonRead(itemJson, BuildJsonPath(inner));
     }
 
     private static bool Truthy(string v)
@@ -463,13 +485,27 @@ public static class SisulaRenderer
     {
         var parts = new List<string>();
         var sb = new StringBuilder();
-        bool inStr = false; char prev = '\0';
+        bool inStr = false; char quoteChar = '\0';
         for (int i = 0; i < argList.Length; i++)
         {
             var ch = argList[i];
-            if (ch == '\'' && prev != '\\') { inStr = !inStr; sb.Append(ch); prev = ch; continue; }
-            if (!inStr && ch == ',') { parts.Add(sb.ToString().Trim()); sb.Clear(); prev = ch; continue; }
-            sb.Append(ch); prev = ch;
+            if (!inStr && ch == '"')
+            {
+                inStr = true; quoteChar = ch; sb.Append(ch); continue;
+            }
+            if (inStr && ch == quoteChar)
+            {
+                if (i + 1 < argList.Length && argList[i + 1] == quoteChar)
+                {
+                    sb.Append(ch);
+                    sb.Append(argList[i + 1]);
+                    i++;
+                    continue;
+                }
+                inStr = false; quoteChar = '\0'; sb.Append(ch); continue;
+            }
+            if (!inStr && ch == ',') { parts.Add(sb.ToString().Trim()); sb.Clear(); continue; }
+            sb.Append(ch);
         }
         if (sb.Length > 0) parts.Add(sb.ToString().Trim());
         return parts.ToArray();
@@ -480,10 +516,17 @@ public static class SisulaRenderer
         if (string.IsNullOrWhiteSpace(token)) return null;
         token = token.Trim();
         // String literal in single quotes ('' -> ')
-        if (token.Length >= 2 && token[0] == '\'' && token[token.Length - 1] == '\'')
+        if (token.Length >= 2)
         {
-            var inner = token.Substring(1, token.Length - 2).Replace("''", "'");
-            return inner;
+            if (token[0] == '\'' && token[token.Length - 1] == '\'')
+            {
+                throw new ArgumentException("Sisula string literals must use double quotes (\"value\").");
+            }
+            if (token[0] == '"' && token[token.Length - 1] == '"')
+            {
+                var inner = token.Substring(1, token.Length - 2).Replace("\"\"", "\"");
+                return inner;
+            }
         }
         // true/false/null
         if (string.Equals(token, "true", StringComparison.OrdinalIgnoreCase)) return true;
@@ -508,7 +551,7 @@ public static class SisulaRenderer
         if (string.IsNullOrEmpty(varName))
         {
             // Global path
-            return JsonRead(itemJson, "$." + token);
+            return JsonRead(itemJson, BuildJsonPath(token));
         }
         string inner;
         if (token.StartsWith(varName + ".", StringComparison.Ordinal)) inner = token.Substring(varName.Length + 1);
@@ -516,7 +559,7 @@ public static class SisulaRenderer
         else inner = token;
         // If caller passed method-style like first(), strip parentheses to treat as property when resolving against an item
         if (inner.EndsWith("()", StringComparison.Ordinal)) inner = inner.Substring(0, inner.Length - 2);
-        return string.IsNullOrEmpty(inner) ? JsonRead(itemJson, "$") : JsonRead(itemJson, "$." + inner);
+        return string.IsNullOrEmpty(inner) ? JsonRead(itemJson, "$") : JsonRead(itemJson, BuildJsonPath(inner));
     }
 
     private static bool CompareOperands(object lv, object rv, string op)
@@ -579,6 +622,17 @@ public static class SisulaRenderer
         return v.ToString();
     }
 
+    private static string ExpandInlineIfs(string line, string ctxJson, Dictionary<string, string> loopVars, Regex matcher)
+    {
+        if (string.IsNullOrEmpty(line)) return line;
+        return matcher.Replace(line, m =>
+        {
+            var condition = m.Groups[1].Value.Trim();
+            var content = m.Groups[2].Value;
+            return EvalConditionInContext(condition, ctxJson, loopVars) ? content : string.Empty;
+        });
+    }
+
     private static string RenderInline(string text, string ctxJson, Dictionary<string, string> loopVars)
     {
         // Tokens: $path.to.value$ or ${path.to.value}$
@@ -586,7 +640,7 @@ public static class SisulaRenderer
         // Example matches: S_SCHEMA, source.qualified, source.parts[0].name, part.index()
         // Method-style () only allowed at the end (metadata); intermediate segments cannot have ()
         text = Regex.Replace(text,
-            @"\$\{?([A-Za-z0-9_]+(?:\[\d+\])?(?:\.[A-Za-z0-9_]+(?:\[\d+\])?)*(?:\(\))?)\}?\$",
+            @"\$\{?([\p{L}\p{Nd}_]+(?:\[\d+\])?(?:\.[\p{L}\p{Nd}_]+(?:\[\d+\])?)*(?:\(\))?)\}?\$",
             m => ReadPath(ctxJson, loopVars, m.Groups[1].Value),
             RegexOptions.Singleline);
 
@@ -627,14 +681,14 @@ public static class SisulaRenderer
                         var innerPath = path.Substring(v.Length + 1);
                         // strip trailing () if present (method form should map to metadata; if not, treat as normal path without ())
                         if (innerPath.EndsWith("()", StringComparison.Ordinal)) innerPath = innerPath.Substring(0, innerPath.Length - 2);
-                        var inner = "$." + innerPath;
+                        var inner = BuildJsonPath(innerPath);
                         return JsonRead(itemJson, inner);
                     }
                 }
             }
 
             // Fallback to global context
-            var jsonPath = "$." + path;
+            var jsonPath = BuildJsonPath(path);
             return JsonRead(ctxJson, jsonPath);
         }
         catch
@@ -675,12 +729,12 @@ public static class SisulaRenderer
                 if (path.StartsWith(v + ".", StringComparison.Ordinal))
                 {
                     baseJson = kvp.Value ?? string.Empty;
-                    jsonPath = "$." + path.Substring(v.Length + 1);
+                    jsonPath = BuildJsonPath(path.Substring(v.Length + 1));
                     goto HavePath;
                 }
             }
         }
-        jsonPath = path.StartsWith("$", StringComparison.Ordinal) ? path : ("$." + path);
+        jsonPath = path.StartsWith("$", StringComparison.Ordinal) ? path : BuildJsonPath(path);
 
     HavePath:
         using (var conn = new SqlConnection("context connection=true"))
@@ -714,5 +768,29 @@ public static class SisulaRenderer
             var result = cmd.ExecuteScalar();
             return result == null || result is DBNull ? null : (string)result;
         }
+    }
+
+    private static string BuildJsonPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return "$";
+        if (path.StartsWith("$", StringComparison.Ordinal)) return path;
+        var sb = new StringBuilder("$");
+        var segments = path.Split('.');
+        foreach (var segment in segments)
+        {
+            if (string.IsNullOrEmpty(segment)) continue;
+            int bracketIndex = segment.IndexOf('[');
+            var prop = bracketIndex >= 0 ? segment.Substring(0, bracketIndex) : segment;
+            var suffix = bracketIndex >= 0 ? segment.Substring(bracketIndex) : string.Empty;
+            if (!string.IsNullOrEmpty(prop))
+            {
+                sb.Append('.').Append('"').Append(prop.Replace("\"", "\"\"")).Append('"');
+            }
+            if (!string.IsNullOrEmpty(suffix))
+            {
+                sb.Append(suffix);
+            }
+        }
+        return sb.ToString();
     }
 }
