@@ -26,7 +26,8 @@ Comments
 
 Loop metadata
 - Each `foreach` injects per-loop metadata that's accessible by the loop variable name via method calls.
-  - Use the method form to access loop metadata: `varName.index()`, `varName.count()`, `varName.first()`, `varName.last()`.
+    - Use the method form to access loop metadata: `varName.index()`, `varName.count()`, `varName.first()`, `varName.last()`.
+    - Tokens can reference these methods directly, e.g. `$c.index()$`, `$t.count()$`.
   - Only the method form is supported to avoid ambiguity in nested loops and path parsing.
 
 Expression language

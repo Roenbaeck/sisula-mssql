@@ -651,6 +651,9 @@ public static class SisulaRenderer
     {
         try
         {
+            var metaValue = ResolveLoopMetadataToken(loopVars, path);
+            if (metaValue != null) return metaValue;
+
             // Determine if the path targets a loop variable first
             if (loopVars != null)
             {
@@ -792,5 +795,28 @@ public static class SisulaRenderer
             }
         }
         return sb.ToString();
+    }
+
+    private static string ResolveLoopMetadataToken(Dictionary<string, string> loopVars, string path)
+    {
+        if (loopVars == null || string.IsNullOrEmpty(path)) return null;
+        int dot = path.IndexOf('.');
+        if (dot <= 0) return null;
+        var varName = path.Substring(0, dot);
+        var remainder = path.Substring(dot + 1);
+        if (string.IsNullOrEmpty(remainder)) return null;
+        if (remainder.EndsWith("()", StringComparison.Ordinal)) remainder = remainder.Substring(0, remainder.Length - 2);
+        if (!IsLoopMetadataProperty(remainder)) return null;
+        string metaJson;
+        if (!loopVars.TryGetValue("__LOOP__" + varName, out metaJson)) return null;
+        return JsonRead(metaJson, "$." + remainder);
+    }
+
+    private static bool IsLoopMetadataProperty(string name)
+    {
+        return string.Equals(name, "index", StringComparison.Ordinal)
+            || string.Equals(name, "count", StringComparison.Ordinal)
+            || string.Equals(name, "first", StringComparison.Ordinal)
+            || string.Equals(name, "last", StringComparison.Ordinal);
     }
 }

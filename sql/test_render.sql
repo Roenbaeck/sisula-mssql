@@ -2,6 +2,8 @@
 	Very simple test SP for fn_sisulate.
 
 	2025-10-28	Lars Rönnbäck		CREATED
+  2025-11-03  Lars Rönnbäck   Added loop metadata usage in template.
+                              Extended the template example.
 
 	EXEC Test_Sisulate
 */
@@ -36,6 +38,7 @@ BEGIN
 
 	$/ foreach t in tables
 	-- Create: $t.table$_Staging
+	-- Number of tables: $t.count()$
 	CREATE TABLE [$SCHEMA$].[$t.table$_Staging] (
 		$- loop over some variables
 		$-
@@ -43,7 +46,7 @@ BEGIN
 		$/ if c.last() 
 		-- here comes the last column
 		$/ endif
-		[$c.name$] $c.type$,$/ if c.ordinal -- $c.ordinal$ $/ endif		
+		[$c.name$] $c.type$,$/ if c.ordinal -- $c.ordinal$ ($c.index()$) $/ endif		
 		$/ if c.first() 
 		-- that was the first column
 		$/ endif
