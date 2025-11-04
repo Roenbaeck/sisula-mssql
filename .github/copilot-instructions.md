@@ -9,6 +9,7 @@
 - `scripts/build.ps1` — how the DLL is compiled (csc). No third‑party dependencies required. All JSON handling is performed using SQL Server's built-in JSON functions; no third-party JSON libraries are used.
 - `sql/assemblies/CreateAssemblies.sql`, `sql/CreateFunction.sql` — DB steps to register the function `dbo.fn_sisulate`. Enabling CLR and trusted assembly registration are DBA tasks (instance-level).
 - `templates/CreateTypedTables.sql` — example template demonstrating line directives (`$/ foreach`, `$/ end`), token usage, and common patterns to follow.
+  - See `SISULA.md` -> "Whitespace & inline directive rules" for guidance on how spacing around inline directives (`$/ if`, `$/ else`, `$/ endfor`) is treated by the renderer.
 
 ## Project-specific conventions
 

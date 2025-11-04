@@ -126,3 +126,14 @@ Multi-line if example with else branch:
     -- Feature disabled branch
     $/ endif
 
+Whitespace & inline directive rules
+-----------------------------------
+
+Small templates often rely on precise spacing when embedding inline directives. The renderer follows these ergonomic rules so authors get intuitive results:
+
+- Trailing whitespace that is written inside a branch is preserved. Example: `Index $c.index()$ found ` will keep the trailing space after `found` when rendered.
+- Whitespace between a `$/` marker and the following keyword (for example the space in `$/ else`) is ignored and does not affect branch content.
+- When an inline directive is embedded in a larger inline `foreach`/`if`, spacing between directives is treated as separation, not as part of a branch. In practice this means you can add a single space before/after branch content as a separator and it will be preserved consistently.
+
+If you need separators only between items (but not after the final item) prefer using a conditional that inspects `varName.last()` or generate separators in a separate `foreach` pass.
+
