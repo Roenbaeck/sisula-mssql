@@ -403,6 +403,30 @@ public static class SisulaRenderer
         if (string.IsNullOrWhiteSpace(expr)) return true;
         expr = expr.Trim();
 
+        // Handle "or" operator (lowest precedence)
+        var orParts = SplitByLogicalOperator(expr, "or");
+        if (orParts.Count > 1)
+        {
+            foreach (var part in orParts)
+            {
+                if (EvalConditionOnItem(itemJson, varName, part.Trim(), loopVars))
+                    return true;
+            }
+            return false;
+        }
+
+        // Handle "and" operator (higher precedence)
+        var andParts = SplitByLogicalOperator(expr, "and");
+        if (andParts.Count > 1)
+        {
+            foreach (var part in andParts)
+            {
+                if (!EvalConditionOnItem(itemJson, varName, part.Trim(), loopVars))
+                    return false;
+            }
+            return true;
+        }
+
         // Function call: contains(x,'y'), startswith(x,'y'), endswith(x,'y')
         var mFunc = Regex.Match(expr, @"^(\w+)\s*\((.*)\)$", RegexOptions.Singleline);
         if (mFunc.Success)
@@ -455,6 +479,32 @@ public static class SisulaRenderer
     private static bool EvalConditionInContext(string expr, string ctxJson, Dictionary<string, string> loopVars)
     {
         if (string.IsNullOrWhiteSpace(expr)) return true;
+        expr = expr.Trim();
+
+        // Handle "or" operator (lowest precedence)
+        var orParts = SplitByLogicalOperator(expr, "or");
+        if (orParts.Count > 1)
+        {
+            foreach (var part in orParts)
+            {
+                if (EvalConditionInContext(part.Trim(), ctxJson, loopVars))
+                    return true;
+            }
+            return false;
+        }
+
+        // Handle "and" operator (higher precedence)
+        var andParts = SplitByLogicalOperator(expr, "and");
+        if (andParts.Count > 1)
+        {
+            foreach (var part in andParts)
+            {
+                if (!EvalConditionInContext(part.Trim(), ctxJson, loopVars))
+                    return false;
+            }
+            return true;
+        }
+
         // If expression references LOOP or another loop var, and loopVars contains it, resolve accordingly.
         // We'll delegate to EvalConditionOnItem by passing the matched itemJson and varName when appropriate.
 
@@ -570,6 +620,84 @@ public static class SisulaRenderer
         }
         if (sb.Length > 0) parts.Add(sb.ToString().Trim());
         return parts.ToArray();
+    }
+
+    private static List<string> SplitByLogicalOperator(string expr, string op)
+    {
+        var parts = new List<string>();
+        if (string.IsNullOrEmpty(expr))
+        {
+            parts.Add(expr);
+            return parts;
+        }
+
+        bool inStr = false;
+        char quoteChar = '\0';
+        int lastIndex = 0;
+        int i = 0;
+
+        while (i < expr.Length)
+        {
+            var ch = expr[i];
+            
+            // Handle string literals
+            if (!inStr && ch == '"')
+            {
+                inStr = true;
+                quoteChar = ch;
+                i++;
+                continue;
+            }
+            if (inStr && ch == quoteChar)
+            {
+                // Check for escaped quote
+                if (i + 1 < expr.Length && expr[i + 1] == quoteChar)
+                {
+                    i += 2; // skip escaped quote
+                    continue;
+                }
+                inStr = false;
+                quoteChar = '\0';
+                i++;
+                continue;
+            }
+
+            // Look for operator outside strings
+            if (!inStr)
+            {
+                // Check if we're at a word boundary and have the operator
+                bool atWordBoundary = (i == 0 || !char.IsLetterOrDigit(expr[i - 1]));
+                if (atWordBoundary && i + op.Length <= expr.Length)
+                {
+                    var candidate = expr.Substring(i, op.Length);
+                    if (string.Equals(candidate, op, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Check word boundary after operator
+                        bool afterWordBoundary = (i + op.Length >= expr.Length || !char.IsLetterOrDigit(expr[i + op.Length]));
+                        if (afterWordBoundary)
+                        {
+                            // Found operator - add part before it
+                            parts.Add(expr.Substring(lastIndex, i - lastIndex));
+                            lastIndex = i + op.Length;
+                            i = lastIndex;
+                            continue;
+                        }
+                    }
+                }
+            }
+            i++;
+        }
+
+        // Add remaining part
+        parts.Add(expr.Substring(lastIndex));
+
+        // If no operator found, return single part
+        if (parts.Count == 1 && parts[0] == expr)
+        {
+            return parts;
+        }
+
+        return parts;
     }
 
     private static object ResolveOperand(string token, string itemJson, string varName, Dictionary<string, string> loopVars)

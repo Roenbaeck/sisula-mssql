@@ -33,6 +33,7 @@ Loop metadata
 
 Expression language
 - Comparison operators: `==, !=, >=, <=, >, <`.
+- Logical operators: `and`, `or` (case-insensitive). Operator precedence: `and` is evaluated before `or`.
 - Functions: `contains(x,"y")`, `startswith(x,"y")`, `endswith(x,"y")`.
 - String literals use double quotes (`"value"`). Escape a double quote inside a literal with `""`.
 - Single-quoted literals are not supported (use double quotes exclusively).
@@ -125,6 +126,24 @@ Multi-line if example with else branch:
     $/ else
     -- Feature disabled branch
     $/ endif
+
+Multi-line if example with AND operator:
+
+    $/ if item.price > 50 and item.category == "electronics"
+    -- High-value electronics
+    $/ endif
+
+Multi-line if example with OR operator:
+
+    $/ if item.featured == true or item.discount > 0
+    -- Special item
+    $/ endif
+
+Foreach with WHERE using AND/OR:
+
+    $/ foreach item in items where item.price > 30 and item.stock > 0 or item.category == "sale"
+    -- Available or on sale: [$item.name$]
+    $/ endfor
 
 Whitespace & inline directive rules
 -----------------------------------

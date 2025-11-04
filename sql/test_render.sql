@@ -19,15 +19,19 @@ DECLARE @template nvarchar(max) = N'
 -- Header
 -- Generated: $VARIABLES.GENERATED_AT$
 -- By: $VARIABLES.USERNAME$ on $VARIABLES.COMPUTERNAME$ ($VARIABLES.USERDOMAIN$)
-$/ if VARIABLES.MYINTEGER == 1
+$/ if VARIABLES.MYINTEGER == 1 or VARIABLES.MYINTEGER == 3
 -- My Integer is $VARIABLES.MYINTEGER$
-$/ else
--- My Integer is not 1 (value: $VARIABLES.MYINTEGER$)
 $/ endif
-$/ if VARIABLES.MYLETTER == "A"
+$/ if VARIABLES.MYINTEGER == 2
+-- This comment is not displayed
+$/ endif
+$/ if VARIABLES.MYLETTER == "A" and VARIABLES.MYINTEGER == 1
 -- My Letter is $VARIABLES.MYLETTER$
+$/ endif
+$/ if VARIABLES.MYLETTER == "B" 
+-- This comment is not displayed
 $/ else
--- My Letter is not A (value: $VARIABLES.MYLETTER$)
+-- But this comment is
 $/ endif
 -- Svenska tecken: $VARIABLES.ÅÄÖ$
 IF (1 > 1) PRINT ''Not likely''
@@ -52,7 +56,7 @@ BEGIN
 		$/ endif
 		$/ endfor
 		$-
-    -- $/ foreach c in t.columns C:$c.index()$ $/ endfor
+		-- $/ foreach c in t.columns C:$c.index()$ $/ endfor
 		-- $/ foreach c in t.columns $/ if c.index() == 10 Index $c.index()$ found $/ else X $/ endif $/ endfor
 		[created_at] datetime2 not null default ''$TIMESTAMP$''
 	);
@@ -656,3 +660,119 @@ DECLARE @rendered nvarchar(max) = dbo.fn_sisulate(@template, @bindings);
 SELECT cast('<?generated -- ' + @rendered + ' --?>' as XML);
 
 END -- end of proc
+GO
+
+/*
+	Test AND/OR logical operators in conditions
+	
+	2025-11-04	Lars Rönnbäck		Added and/or operator support
+	
+	EXEC Test_Sisulate_AndOr
+*/
+CREATE OR ALTER PROC Test_Sisulate_AndOr
+AS
+BEGIN
+
+SET NOCOUNT ON;
+
+DECLARE @template nvarchar(max) = N'
+-- ===== Test AND/OR operators =====
+
+-- Test 1: AND operator in WHERE clause
+$/ foreach item in items where item.price > 50 and item.category == "electronics"
+-- Item: $item.name$ (Price: $item.price$, Category: $item.category$)
+$/ endfor
+
+-- Test 2: OR operator in WHERE clause
+$/ foreach item in items where item.category == "books" or item.category == "media"
+-- Item: $item.name$ (Category: $item.category$)
+$/ endfor
+
+-- Test 3: Combined AND/OR (AND has higher precedence)
+-- This should match: (price > 30 AND featured) OR (category == "sale")
+$/ foreach item in items where item.price > 30 and item.featured == true or item.category == "sale"
+-- Featured or Sale: $item.name$ (Price: $item.price$, Featured: $item.featured$, Category: $item.category$)
+$/ endfor
+
+-- Test 4: AND in IF statement
+$/ foreach item in items
+$/ if item.price > 40 and item.stock > 0
+-- Available: $item.name$ (Price: $item.price$, Stock: $item.stock$)
+$/ endif
+$/ endfor
+
+-- Test 5: OR in IF statement
+$/ foreach item in items
+$/ if item.featured == true or item.discount > 0
+-- Special: $item.name$ (Featured: $item.featured$, Discount: $item.discount$)
+$/ endif
+$/ endfor
+
+-- Test 6: Inline IF with AND
+$/ foreach item in items
+-- $item.name$: $/ if item.price < 100 and item.stock > 5 In Stock $/ else Limited $/ endif
+$/ endfor
+';
+
+DECLARE @bindings nvarchar(max) = N'
+{
+  "items": [
+    {
+      "name": "Laptop",
+      "price": 999,
+      "category": "electronics",
+      "featured": true,
+      "stock": 10,
+      "discount": 0
+    },
+    {
+      "name": "Mouse",
+      "price": 25,
+      "category": "electronics",
+      "featured": false,
+      "stock": 50,
+      "discount": 5
+    },
+    {
+      "name": "Book",
+      "price": 15,
+      "category": "books",
+      "featured": false,
+      "stock": 100,
+      "discount": 0
+    },
+    {
+      "name": "DVD",
+      "price": 20,
+      "category": "media",
+      "featured": true,
+      "stock": 0,
+      "discount": 10
+    },
+    {
+      "name": "Keyboard",
+      "price": 75,
+      "category": "electronics",
+      "featured": false,
+      "stock": 3,
+      "discount": 0
+    },
+    {
+      "name": "Sale Item",
+      "price": 10,
+      "category": "sale",
+      "featured": false,
+      "stock": 2,
+      "discount": 50
+    }
+  ]
+}';
+
+-- Render
+DECLARE @rendered nvarchar(max) = dbo.fn_sisulate(@template, @bindings);
+
+-- Inspect output
+SELECT cast('<?generated -- ' + @rendered + ' --?>' as XML);
+
+END -- end of proc
+GO
