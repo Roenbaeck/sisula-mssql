@@ -51,6 +51,9 @@ BEGIN
 		-- here comes the last column
 		$/ endif
 		[$c.name$] $c.type$,$/ if c.ordinal -- $c.ordinal$ ($c.index()$) $/ endif		
+		$/ if contains(c.type, "char") 
+		-- that was a character based column type
+		$/ endif
 		$/ if c.first() 
 		-- that was the first column
 		$/ endif

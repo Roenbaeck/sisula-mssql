@@ -508,6 +508,31 @@ public static class SisulaRenderer
         // If expression references LOOP or another loop var, and loopVars contains it, resolve accordingly.
         // We'll delegate to EvalConditionOnItem by passing the matched itemJson and varName when appropriate.
 
+        // Check for function calls - these need special handling to detect loop variable references in args
+        var mFuncCheck = Regex.Match(expr, @"^(\w+)\s*\((.*)\)$", RegexOptions.Singleline);
+        if (mFuncCheck.Success)
+        {
+            // Extract function arguments to check if they reference loop variables
+            var argSpan = mFuncCheck.Groups[2].Value;
+            // Simple heuristic: if args contain "varName.", treat as loop variable context
+            if (loopVars != null)
+            {
+                foreach (var kvp in loopVars)
+                {
+                    if (kvp.Key.StartsWith("__LOOP__", StringComparison.Ordinal)) continue;
+                    var varName = kvp.Key;
+                    // Check if function args reference this loop variable
+                    if (argSpan.Contains(varName + ".") || argSpan.Contains(varName + ",") || argSpan.Contains(varName + ")") || argSpan.StartsWith(varName))
+                    {
+                        // Function references this loop variable - evaluate in that context
+                        return EvalConditionOnItem(kvp.Value, varName, expr, loopVars);
+                    }
+                }
+            }
+            // No loop variable reference found - evaluate against global context
+            return EvalConditionOnItem(ctxJson, string.Empty, expr, loopVars);
+        }
+
         // Simple heuristic: if expr contains an identifier followed by a dot (like LOOP.first),
         // treat the left-most identifier as varName and evaluate against its JSON.
         // Handle method-style metadata: varName.first(), varName.last(), varName.index(), varName.count()
