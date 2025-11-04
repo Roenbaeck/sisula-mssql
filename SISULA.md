@@ -16,9 +16,9 @@ Line directives
   - Optional `order by` supports numeric-aware sorting and an optional `desc` flag.
     - Inline form: `$/ foreach <var> in <path> <content> $/ endfor` — repeats `<content>` for each item (content is evaluated with the loop variable in scope and supports inline-if tokens).
 - If:
-  - Block form: `$/ if <condition>` ... `$/ endif` — conditional rendering of blocks.
-  - Single-line form (inline-if): `$/ if <cond> <content> $/ endif` — renders `<content>` inline when `<cond>` is true. The inline content respects the indentation where the directive appears.
-    - Inline-if directives can also appear inside a content line to add or remove inline fragments (useful for trailing commas or comments that depend on metadata).
+    - Block form: `$/ if <condition>` ... `[ $/ else ... ]` ... `$/ endif` — optional `$/ else` renders an alternate branch when the condition is false.
+    - Single-line form (inline-if): `$/ if <cond> <when-true> $/ else <when-false> $/ endif` — optional `$/ else` controls the false branch; omit it to render nothing on false. The inline content respects the indentation where the directive appears.
+        - Inline-if directives can also appear inside a content line to add or remove inline fragments (useful for trailing commas or comments that depend on metadata). Nested inline directives can use `$/ else` as well.
 
 Comments
 - Line comments: start a line with `$-` (optionally indented) to remove it from the rendered output.
@@ -90,7 +90,7 @@ Nested foreach example with loop metadata:
 
 Inline-if example (single-line, follows indentation):
 
-        $/ if c.first() -- first column $/ endif
+    $/ if c.first() -- first column $/ else -- not first $/ endif
 
 Inline-if embedded within a line (e.g., mark the last column):
 
@@ -116,5 +116,13 @@ Multi-line if example with comparison:
 
     $/ if table.priority > 5
     -- High priority table
+    $/ endif
+
+Multi-line if example with else branch:
+
+    $/ if table.enabled
+    -- Feature enabled branch
+    $/ else
+    -- Feature disabled branch
     $/ endif
 

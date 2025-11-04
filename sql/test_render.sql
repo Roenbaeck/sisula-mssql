@@ -4,6 +4,7 @@
 	2025-10-28	Lars Rönnbäck		CREATED
   2025-11-03  Lars Rönnbäck   Added loop metadata usage in template.
                               Extended the template example.
+	2025-11-04	Lars Rönnbäck		Else in if-statements.
 
 	EXEC Test_Sisulate
 */
@@ -20,15 +21,13 @@ DECLARE @template nvarchar(max) = N'
 -- By: $VARIABLES.USERNAME$ on $VARIABLES.COMPUTERNAME$ ($VARIABLES.USERDOMAIN$)
 $/ if VARIABLES.MYINTEGER == 1
 -- My Integer is $VARIABLES.MYINTEGER$
-$/ endif
-$/ if VARIABLES.MYINTEGER == 2
--- This comment is not displayed
+$/ else
+-- My Integer is not 1 (value: $VARIABLES.MYINTEGER$)
 $/ endif
 $/ if VARIABLES.MYLETTER == "A"
 -- My Letter is $VARIABLES.MYLETTER$
-$/ endif
-$/ if VARIABLES.MYLETTER == "B"
--- This comment is not displayed
+$/ else
+-- My Letter is not A (value: $VARIABLES.MYLETTER$)
 $/ endif
 -- Svenska tecken: $VARIABLES.ÅÄÖ$
 IF (1 > 1) PRINT ''Not likely''
@@ -53,8 +52,8 @@ BEGIN
 		$/ endif
 		$/ endfor
 		$-
-		-- $/ foreach c in t.columns C:$c.index()$ $/ endfor
-		-- $/ foreach c in t.columns $/ if c.index() == 10 Index $c.index()$ found $/ endif $/ endfor
+    -- $/ foreach c in t.columns C:$c.index()$ $/ endfor
+		-- $/ foreach c in t.columns $/ if c.index() == 10 Index $c.index()$ found $/else X $/ endif $/ endfor
 		[created_at] datetime2 not null default ''$TIMESTAMP$''
 	);
 
@@ -82,7 +81,7 @@ DECLARE @bindings nvarchar(max) = N'
     "COMPUTERNAME": "' + STRING_ESCAPE(@servername, 'json') + N'",
     "USERDOMAIN": "' + STRING_ESCAPE(@dbname, 'json') + N'",
     "MYINTEGER": 1,
-    "MYLETTER": "A",
+  "MYLETTER": "B",
     "ÅÄÖ": "åäö"
   },
   "TIMESTAMP": "' + @timestamp + N'",

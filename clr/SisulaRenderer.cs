@@ -18,6 +18,7 @@ public static class SisulaRenderer
     private static readonly Regex ReIfInlineEmbedded = new Regex("\\$/\\s*if\\s+(.*?)\\s*\\$/\\s*endif", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex ReIf = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReEndIf = new Regex("^\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReElse = new Regex("^\\s*\\$/\\s*else\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReCommentLine = new Regex("^\\s*\\$-.*$", RegexOptions.Compiled);
     private static readonly Regex ReInlineComment = new Regex("\\$-.*?-\\$", RegexOptions.Compiled);
 
@@ -125,6 +126,7 @@ public static class SisulaRenderer
     var reIfInlineEmbedded = ReIfInlineEmbedded;
     var reIf = ReIf;
     var reEndIf = ReEndIf; // For future if-blocks
+    var reElse = ReElse;
     var reCommentLine = ReCommentLine;
     var reInlineComment = ReInlineComment;
 
@@ -227,12 +229,13 @@ public static class SisulaRenderer
             var mIfInline = reIfInline.Match(line);
             if (mIfInline.Success)
             {
-                string condition, content;
-                SplitInlineIfBody(mIfInline.Groups[1].Value, out condition, out content);
+                string condition, whenTrue, whenFalse;
+                SplitInlineIfBody(mIfInline.Groups[1].Value, out condition, out whenTrue, out whenFalse);
                 bool condResult = EvalConditionInContext(condition, ctxJson, loopVars);
-                if (condResult)
+                var branch = condResult ? whenTrue : whenFalse;
+                if (!string.IsNullOrEmpty(branch))
                 {
-                    sb.Append(RenderInline(content, ctxJson, loopVars));
+                    sb.Append(RenderInline(branch, ctxJson, loopVars));
                 }
                 if (hasNewline) sb.Append('\n');
                 pos = hasNewline ? (lineEnd + 1) : text.Length;
@@ -246,6 +249,10 @@ public static class SisulaRenderer
                 pos = hasNewline ? (lineEnd + 1) : text.Length;
                 var bodyStart = pos;
                 int depth = 1;
+                bool elseFound = false;
+                int trueBodyEnd = -1;
+                int elseBodyStart = -1;
+                int endIfStart = -1;
                 while (pos < text.Length && depth > 0)
                 {
                     int nextLineEnd = text.IndexOf('\n', pos);
@@ -256,7 +263,24 @@ public static class SisulaRenderer
                     var innerLine = text.Substring(pos, stopTrim - pos);
 
                     if (reIf.IsMatch(innerLine)) depth++;
-                    else if (reEndIf.IsMatch(innerLine)) { depth--; if (depth == 0) { pos = nl ? (nextLineEnd + 1) : text.Length; break; } }
+                    else if (depth == 1 && reElse.IsMatch(innerLine))
+                    {
+                        elseFound = true;
+                        trueBodyEnd = pos;
+                        pos = nl ? (nextLineEnd + 1) : text.Length;
+                        elseBodyStart = pos;
+                        continue;
+                    }
+                    else if (reEndIf.IsMatch(innerLine))
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            endIfStart = pos;
+                            pos = nl ? (nextLineEnd + 1) : text.Length;
+                            break;
+                        }
+                    }
                     // $/ endfor does NOT close if
 
                     if (depth > 0)
@@ -264,14 +288,24 @@ public static class SisulaRenderer
                         pos = nl ? (nextLineEnd + 1) : text.Length;
                     }
                 }
-                var body = text.Substring(bodyStart, Math.Max(0, pos - bodyStart - 0));
+                if (endIfStart < 0) endIfStart = pos;
+                if (!elseFound) trueBodyEnd = endIfStart;
+                else if (trueBodyEnd < 0) trueBodyEnd = endIfStart;
+
+                var trueBody = text.Substring(bodyStart, Math.Max(0, trueBodyEnd - bodyStart));
+                var elseBody = string.Empty;
+                if (elseFound && elseBodyStart >= 0)
+                {
+                    elseBody = text.Substring(elseBodyStart, Math.Max(0, endIfStart - elseBodyStart));
+                }
 
                 var condition = mIf.Groups[1].Value.Trim();
                 // Evaluate condition using available loop variables so expressions like LOOP.first work
                 bool condResult = EvalConditionInContext(condition, ctxJson, loopVars);
-                if (condResult)
+                var branchBody = condResult ? trueBody : elseBody;
+                if (!string.IsNullOrEmpty(branchBody))
                 {
-                    sb.Append(RenderScript(body, ctxJson, loopVars));
+                    sb.Append(RenderScript(branchBody, ctxJson, loopVars));
                 }
                 continue;
             }
@@ -661,17 +695,19 @@ public static class SisulaRenderer
         if (string.IsNullOrEmpty(line)) return line;
         return matcher.Replace(line, m =>
         {
-            string condition, content;
-            SplitInlineIfBody(m.Groups[1].Value, out condition, out content);
-            return EvalConditionInContext(condition, ctxJson, loopVars) ? content : string.Empty;
+            string condition, whenTrue, whenFalse;
+            SplitInlineIfBody(m.Groups[1].Value, out condition, out whenTrue, out whenFalse);
+            var branch = EvalConditionInContext(condition, ctxJson, loopVars) ? whenTrue : whenFalse;
+            return branch ?? string.Empty;
         });
     }
 
-    // Split an inline-if directive into expression and following content while preserving user spacing.
-    private static void SplitInlineIfBody(string body, out string condition, out string content)
+    // Split an inline-if directive into condition and branch content while preserving user spacing.
+    private static void SplitInlineIfBody(string body, out string condition, out string whenTrue, out string whenFalse)
     {
         condition = string.Empty;
-        content = string.Empty;
+        whenTrue = string.Empty;
+        whenFalse = string.Empty;
         if (body == null) return;
 
         var span = body;
@@ -735,7 +771,8 @@ public static class SisulaRenderer
                     }
 
                     condition = span.Substring(start, i - start).Trim();
-                    content = span.Substring(i);
+                    var remainder = span.Substring(i);
+                    SplitInlineIfBranches(remainder, out whenTrue, out whenFalse);
                     return;
                 }
             }
@@ -743,7 +780,8 @@ public static class SisulaRenderer
         }
 
         condition = span.Substring(start, i - start).Trim();
-    content = i < len ? span.Substring(i) : string.Empty;
+        var tail = i < len ? span.Substring(i) : string.Empty;
+        SplitInlineIfBranches(tail, out whenTrue, out whenFalse);
     }
 
     private static bool StartsWithBinaryOperator(string text, int index)
@@ -767,6 +805,49 @@ public static class SisulaRenderer
     private static bool IsBinaryOperatorChar(char ch)
     {
         return ch == '=' || ch == '!' || ch == '>' || ch == '<';
+    }
+
+    private static void SplitInlineIfBranches(string remainder, out string whenTrue, out string whenFalse)
+    {
+        whenTrue = remainder ?? string.Empty;
+        whenFalse = string.Empty;
+        if (string.IsNullOrEmpty(remainder)) return;
+
+        int depth = 0;
+        int index = 0;
+        while (index < remainder.Length)
+        {
+            int marker = remainder.IndexOf("$/", index, StringComparison.Ordinal);
+            if (marker < 0) break;
+            int keywordStart = marker + 2;
+            while (keywordStart < remainder.Length && char.IsWhiteSpace(remainder[keywordStart])) keywordStart++;
+            int keywordEnd = keywordStart;
+            while (keywordEnd < remainder.Length && char.IsLetter(remainder[keywordEnd])) keywordEnd++;
+            if (keywordEnd <= keywordStart)
+            {
+                index = keywordEnd;
+                continue;
+            }
+            var keyword = remainder.Substring(keywordStart, keywordEnd - keywordStart).ToLowerInvariant();
+            switch (keyword)
+            {
+                case "if":
+                    depth++;
+                    break;
+                case "endif":
+                    if (depth > 0) depth--;
+                    break;
+                case "else":
+                    if (depth == 0)
+                    {
+                        whenTrue = remainder.Substring(0, marker);
+                        whenFalse = remainder.Substring(keywordEnd);
+                        return;
+                    }
+                    break;
+            }
+            index = keywordEnd;
+        }
     }
 
     private static string ExpandInlineForeach(string text, string ctxJson, Dictionary<string, string> loopVars, Regex matcher, Regex reIfInlineEmbedded)
