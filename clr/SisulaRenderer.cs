@@ -840,8 +840,8 @@ public static class SisulaRenderer
                 case "else":
                     if (depth == 0)
                     {
-                        whenTrue = remainder.Substring(0, marker);
-                        whenFalse = remainder.Substring(keywordEnd);
+                        whenTrue = remainder.Substring(0, marker).TrimStart();
+                        whenFalse = remainder.Substring(keywordEnd).TrimStart();
                         return;
                     }
                     break;
