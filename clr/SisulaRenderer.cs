@@ -11,11 +11,11 @@ public static class SisulaRenderer
 {
     // Precompiled directive regexes (caching for performance)
     private static readonly Regex ReForeach = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ReForeachInline = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endfor\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ReForeachInlineEmbedded = new Regex("\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s+(.*?)\\s*\\$/\\s*endfor", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReForeachInline = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s+(.*?)\\$/\\s*endfor\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReForeachInlineEmbedded = new Regex("\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s+(.*?)\\$/\\s*endfor", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReEndFor = new Regex("^\\s*\\$/\\s*endfor\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReIfInline = new Regex("^\\s*\\$/\\s*if\\s+(.*?)\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
-    private static readonly Regex ReIfInlineEmbedded = new Regex("\\$/\\s*if\\s+(.*?)\\s*\\$/\\s*endif", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex ReIfInlineEmbedded = new Regex("\\$/\\s*if\\s+(.*?)\\$/\\s*endif\\s*", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex ReIf = new Regex("^\\s*\\$/\\s*if\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReEndIf = new Regex("^\\s*\\$/\\s*endif\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReElse = new Regex("^\\s*\\$/\\s*else\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -771,7 +771,9 @@ public static class SisulaRenderer
                     }
 
                     condition = span.Substring(start, i - start).Trim();
-                    var remainder = span.Substring(i);
+                    int contentStart = i;
+                    while (contentStart < len && char.IsWhiteSpace(span[contentStart])) contentStart++;
+                    var remainder = span.Substring(contentStart);
                     SplitInlineIfBranches(remainder, out whenTrue, out whenFalse);
                     return;
                 }
@@ -840,8 +842,10 @@ public static class SisulaRenderer
                 case "else":
                     if (depth == 0)
                     {
-                        whenTrue = remainder.Substring(0, marker).TrimStart();
-                        whenFalse = remainder.Substring(keywordEnd).TrimStart();
+                        whenTrue = remainder.Substring(0, marker);
+                        int contentStart = keywordEnd;
+                        while (contentStart < remainder.Length && char.IsWhiteSpace(remainder[contentStart])) contentStart++;
+                        whenFalse = remainder.Substring(contentStart);
                         return;
                     }
                     break;

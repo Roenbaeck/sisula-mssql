@@ -53,7 +53,7 @@ BEGIN
 		$/ endfor
 		$-
     -- $/ foreach c in t.columns C:$c.index()$ $/ endfor
-		-- $/ foreach c in t.columns $/ if c.index() == 10 Index $c.index()$ found $/else X $/ endif $/ endfor
+		-- $/ foreach c in t.columns $/ if c.index() == 10 Index $c.index()$ found $/ else X $/ endif $/ endfor
 		[created_at] datetime2 not null default ''$TIMESTAMP$''
 	);
 
