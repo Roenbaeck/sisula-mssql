@@ -453,7 +453,7 @@ public static class SisulaRenderer
 
         // Comparison operators: ==, !=, >=, <=, >, <
         string op = null; int idx = -1;
-        foreach (var cand in new[] {"==","!=",">=","<=",">","<"})
+        foreach (var cand in new[] {"==","!=","=",">=","<=",">","<"})
         {
             idx = IndexOfOp(expr, cand);
             if (idx >= 0) { op = cand; break; }
@@ -917,7 +917,7 @@ public static class SisulaRenderer
                         continue;
                     }
 
-                    if (StartsWithBinaryOperator(span, j))
+                    if (StartsWithBinaryOperator(span, j) || StartsWithLogicalOperator(span, j) || EndsWithLogicalOperator(span, i))
                     {
                         i = j;
                         continue;
@@ -928,6 +928,8 @@ public static class SisulaRenderer
                     while (contentStart < len && char.IsWhiteSpace(span[contentStart])) contentStart++;
                     var remainder = span.Substring(contentStart);
                     SplitInlineIfBranches(remainder, out whenTrue, out whenFalse);
+                    // DEBUG: append hidden marker to see parsed parts in rendered output (temporary)
+                    // whenTrue = whenTrue + "/*DEBUG[cond=" + condition + ";whenTrue=" + whenTrue + ";whenFalse=" + whenFalse + "]*/";
                     return;
                 }
             }
@@ -937,6 +939,8 @@ public static class SisulaRenderer
         condition = span.Substring(start, i - start).Trim();
         var tail = i < len ? span.Substring(i) : string.Empty;
         SplitInlineIfBranches(tail, out whenTrue, out whenFalse);
+        // DEBUG: append hidden marker to see parsed parts in rendered output (temporary)
+        // whenTrue = whenTrue + "/*DEBUG[cond=" + condition + ";whenTrue=" + whenTrue + ";whenFalse=" + whenFalse + "]*/";
     }
 
     private static bool StartsWithBinaryOperator(string text, int index)
@@ -945,7 +949,8 @@ public static class SisulaRenderer
         switch (text[index])
         {
             case '=':
-                return index + 1 < text.Length && text[index + 1] == '=';
+                // Support single '=' and '=='
+                return true;
             case '!':
                 return index + 1 < text.Length && text[index + 1] == '=';
             case '>':
@@ -955,6 +960,44 @@ public static class SisulaRenderer
             default:
                 return false;
         }
+    }
+
+    private static bool StartsWithLogicalOperator(string text, int index)
+    {
+        if (index >= text.Length) return false;
+        // "and" (3 chars)
+        if (index + 3 <= text.Length && string.Compare(text, index, "and", 0, 3, StringComparison.OrdinalIgnoreCase) == 0)
+        {
+            bool beforeOk = index == 0 || !char.IsLetterOrDigit(text[index - 1]);
+            bool afterOk = index + 3 >= text.Length || !char.IsLetterOrDigit(text[index + 3]);
+            if (beforeOk && afterOk) return true;
+        }
+        // "or" (2 chars)
+        if (index + 2 <= text.Length && string.Compare(text, index, "or", 0, 2, StringComparison.OrdinalIgnoreCase) == 0)
+        {
+            bool beforeOk = index == 0 || !char.IsLetterOrDigit(text[index - 1]);
+            bool afterOk = index + 2 >= text.Length || !char.IsLetterOrDigit(text[index + 2]);
+            if (beforeOk && afterOk) return true;
+        }
+        return false;
+    }
+
+    private static bool EndsWithLogicalOperator(string text, int index)
+    {
+        // index is the position of the whitespace; inspect the preceding word
+        if (index <= 0 || index > text.Length) return false;
+        int end = index - 1;
+        // Skip any trailing whitespace before end (should not be necessary as index is whitespace position)
+        while (end >= 0 && char.IsWhiteSpace(text[end])) end--;
+        if (end < 0) return false;
+        int start = end;
+        while (start >= 0 && char.IsLetterOrDigit(text[start])) start--;
+        start++;
+        if (start > end) return false;
+        var word = text.Substring(start, end - start + 1);
+        if (string.Equals(word, "and", StringComparison.OrdinalIgnoreCase)) return true;
+        if (string.Equals(word, "or", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     private static bool IsBinaryOperatorChar(char ch)
