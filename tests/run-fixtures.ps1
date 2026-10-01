@@ -9,6 +9,10 @@
     fn_sisulate entry point.
 
     Usage: .\tests\run-fixtures.ps1 [-Fixtures <directory>] [-Filter <text in a fixture name>]
+           .\tests\run-fixtures.ps1 -WriteSqlTest sql\test_fixtures.sql
+
+    -WriteSqlTest does not run anything. It writes the same fixtures as a T-SQL script that runs
+    each one through dbo.fn_sisulate on a real server, which is the check of the T-SQL side.
 
     Without -Fixtures it looks for a sisula checkout next to this repository: sisula-master, then sisula.
     Uses the same .NET Framework 4 csc.exe as scripts\build.ps1, so it compiles C# 5.
@@ -21,6 +25,7 @@
 param(
     [string] $Fixtures,
     [string] $Filter,
+    [string] $WriteSqlTest,
     [string] $FrameworkDir = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319"
 )
 
@@ -48,6 +53,11 @@ $output = & $csc /nologo /target:exe /define:SISULA_TEST "/out:$exe" /r:System.d
 if ($LASTEXITCODE -ne 0) { $output | ForEach-Object { Write-Host $_ }; throw 'The test build failed.' }
 
 Write-Host "Fixtures: $Fixtures"
+if ($WriteSqlTest) {
+    # Not a test run: write the fixtures as a T-SQL script to run on a real server.
+    & $exe --sql $Fixtures $WriteSqlTest
+    exit $LASTEXITCODE
+}
 $arguments = @($Fixtures)
 if ($Filter) { $arguments += $Filter }
 & $exe @arguments
