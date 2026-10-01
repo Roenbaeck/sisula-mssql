@@ -35,6 +35,12 @@
 
 - Run the sample render: open `sql/test_render.sql` (contains a sample template and bindings) and execute its contents to view `rendered` output.
 
+## Testing
+
+- The language is defined in the sisula repository. Its fixtures (`tests/fixtures/*.json`) are the specification; a change starts there, then in the reference renderer, then in `clr/SisulaRenderer.cs`.
+- Run them with `.\tests\run-fixtures.ps1` (no SQL Server needed; it uses an emulation of the JSON functions). Run `.\tests\run-fixtures.ps1 -WriteSqlTest sql\test_fixtures.sql` and execute the script on a server to check the T-SQL side.
+- The source must stay C# 5 (the .NET Framework 4 `csc.exe`), and every static field must be `readonly` or `const`, for a SAFE assembly.
+
 ## Common change patterns and examples
 
 - To add a new template feature (for example, conditionals or nested foreach):

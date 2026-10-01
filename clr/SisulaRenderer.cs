@@ -7,7 +7,9 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.SqlServer.Server;
 
-public static class SisulaRenderer
+// Partial so that tests/SqlJsonEmulation.cs can supply the JSON access in a test build, which
+// defines SISULA_TEST. A normal build is a single file and behaves exactly as before.
+public static partial class SisulaRenderer
 {
     // Precompiled directive regexes (caching for performance)
     private static readonly Regex ReForeach = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -21,6 +23,21 @@ public static class SisulaRenderer
     private static readonly Regex ReElse = new Regex("^\\s*\\$/\\s*else\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReCommentLine = new Regex("^\\s*\\$-.*$", RegexOptions.Compiled);
     private static readonly Regex ReInlineComment = new Regex("\\$-.*?-\\$", RegexOptions.Compiled);
+    // Negation of one term: "not x" or "!x". Binds tighter than and/or; "!=" is a comparison, not a negation.
+    private static readonly Regex ReNot = new Regex("^(?:not\\s+|!(?!=)\\s*)(.+)$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
+    // A complete inline if or foreach closes on its own line, so it does not open a block.
+    private static readonly Regex ReAnyEndIf = new Regex("\\$/\\s*endif", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ReAnyEndFor = new Regex("\\$/\\s*endfor", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // An empty array as JSON_QUERY returns it: the original text, so the brackets may hold whitespace.
+    private static readonly Regex ReEmptyArray = new Regex("^\\[\\s*\\]$", RegexOptions.Compiled);
+    // The three token forms in one pattern, so that a single pass renders them:
+    //   $'path'$           a quoted SQL string literal
+    //   $|path|$           text that is safe on one SQL comment line
+    //   $path$ or ${path}$ the value as it is
+    private const string TokenPath = "[\\p{L}\\p{Nd}_]+(?:\\[\\d+\\])?(?:\\.[\\p{L}\\p{Nd}_]+(?:\\[\\d+\\])?)*(?:\\(\\))?";
+    private static readonly Regex ReToken = new Regex(
+        "\\$'(" + TokenPath + ")'\\$" + "|\\$\\|(" + TokenPath + ")\\|\\$" + "|\\$\\{?(" + TokenPath + ")\\}?\\$",
+        RegexOptions.Compiled | RegexOptions.Singleline);
 
     [SqlFunction(DataAccess = DataAccessKind.Read, SystemDataAccess = SystemDataAccessKind.Read, IsDeterministic = false, IsPrecise = true)]
     public static SqlString fn_sisulate(SqlString template, SqlString bindingsJson)
@@ -104,6 +121,19 @@ public static class SisulaRenderer
         return sb.ToString();
     }
 
+    // A line opens a block only when the directive is alone on it. "$/ if c A $/ endif" and
+    // "$/ foreach x in xs A $/ endfor" close on the same line, so they are inline and must not
+    // change the nesting depth while a block's body is being scanned for its end.
+    private static bool OpensBlockIf(string line)
+    {
+        return ReIf.IsMatch(line) && !ReAnyEndIf.IsMatch(line);
+    }
+
+    private static bool OpensBlockForeach(string line)
+    {
+        return ReForeach.IsMatch(line) && !ReAnyEndFor.IsMatch(line);
+    }
+
     private static string RenderBlock(string block, string ctxJson, Dictionary<string, string> loopVars)
     {
         return RenderScript(block, ctxJson, loopVars);
@@ -177,7 +207,7 @@ public static class SisulaRenderer
                     if (stopTrim > pos && text[stopTrim - 1] == '\r') stopTrim--;
                     var innerLine = text.Substring(pos, stopTrim - pos);
 
-                    if (reForeach.IsMatch(innerLine)) depth++;
+                    if (OpensBlockForeach(innerLine)) depth++;
                     else if (reEndFor.IsMatch(innerLine)) { depth--; if (depth == 0) { pos = nl ? (nextLineEnd + 1) : text.Length; break; } }
                     // $/ endif does NOT close foreach
 
@@ -225,7 +255,19 @@ public static class SisulaRenderer
                 continue;
             }
 
-            // First, attempt single-line inline if: $/ if <cond> <content> $/ endif
+            // Expand inline directives on content lines BEFORE checking block directives. This keeps an
+            // inline "$/ if ... $/ endif" from being mistaken for a block-level if, and keeps the
+            // indentation of a line that holds nothing else.
+            if (reForeachInlineEmbedded.IsMatch(line))
+            {
+                line = ExpandInlineForeach(line, ctxJson, loopVars, reForeachInlineEmbedded, reIfInlineEmbedded);
+            }
+            if (reIfInlineEmbedded.IsMatch(line))
+            {
+                line = ExpandInlineIfs(line, ctxJson, loopVars, reIfInlineEmbedded);
+            }
+
+            // Whatever inline if is left: $/ if <cond> <content> $/ endif
             var mIfInline = reIfInline.Match(line);
             if (mIfInline.Success)
             {
@@ -262,7 +304,7 @@ public static class SisulaRenderer
                     if (stopTrim > pos && text[stopTrim - 1] == '\r') stopTrim--;
                     var innerLine = text.Substring(pos, stopTrim - pos);
 
-                    if (reIf.IsMatch(innerLine)) depth++;
+                    if (OpensBlockIf(innerLine)) depth++;
                     else if (depth == 1 && reElse.IsMatch(innerLine))
                     {
                         elseFound = true;
@@ -311,14 +353,6 @@ public static class SisulaRenderer
             }
 
             // Content line: expand tokens inline and preserve newline
-            if (reForeachInlineEmbedded.IsMatch(line))
-            {
-                line = ExpandInlineForeach(line, ctxJson, loopVars, reForeachInlineEmbedded, reIfInlineEmbedded);
-            }
-            if (reIfInlineEmbedded.IsMatch(line))
-            {
-                line = ExpandInlineIfs(line, ctxJson, loopVars, reIfInlineEmbedded);
-            }
             // If line became empty after removing inline comments, skip emitting content but keep newline if present
             if (line.Trim().Length > 0)
             {
@@ -427,6 +461,10 @@ public static class SisulaRenderer
             return true;
         }
 
+        // Negation of the single term that follows: "not x" or "!x"
+        var mNotItem = ReNot.Match(expr);
+        if (mNotItem.Success) return !EvalConditionOnItem(itemJson, varName, mNotItem.Groups[1].Value.Trim(), loopVars);
+
         // Function call: contains(x,'y'), startswith(x,'y'), endswith(x,'y')
         var mFunc = Regex.Match(expr, @"^(\w+)\s*\((.*)\)$", RegexOptions.Singleline);
         if (mFunc.Success)
@@ -453,7 +491,7 @@ public static class SisulaRenderer
 
         // Comparison operators: ==, !=, >=, <=, >, <
         string op = null; int idx = -1;
-        foreach (var cand in new[] {"==","!=","=",">=","<=",">","<"})
+        foreach (var cand in new[] {"==","!=",">=","<=","=",">","<"})
         {
             idx = IndexOfOp(expr, cand);
             if (idx >= 0) { op = cand; break; }
@@ -464,8 +502,13 @@ public static class SisulaRenderer
             var right = expr.Substring(idx + op.Length).Trim();
             var lv = ResolveOperand(left, itemJson, varName, loopVars);
             var rv = ResolveOperand(right, itemJson, varName, loopVars);
-            return CompareOperands(lv, rv, op);
+            return CompareOperands(lv, rv, op == "=" ? "==" : op);
         }
+
+        // Only a single path is left at this point. Anything with whitespace outside a literal is an
+        // expression this renderer does not understand; failing loudly beats silently evaluating false.
+        if (expr.IndexOf('"') < 0 && ContainsWhitespace(expr))
+            throw new ArgumentException("Sisula: cannot parse condition: " + expr);
 
         // Fallback: truthy check on metadata or path (relative to varName)
         var metaCheck = TryResolveLoopMetadata(loopVars, expr, varName);
@@ -504,6 +547,10 @@ public static class SisulaRenderer
             }
             return true;
         }
+
+        // Negation of the single term that follows: "not x" or "!x"
+        var mNotCtx = ReNot.Match(expr);
+        if (mNotCtx.Success) return !EvalConditionInContext(mNotCtx.Groups[1].Value.Trim(), ctxJson, loopVars);
 
         // If expression references LOOP or another loop var, and loopVars contains it, resolve accordingly.
         // We'll delegate to EvalConditionOnItem by passing the matched itemJson and varName when appropriate.
@@ -589,6 +636,12 @@ public static class SisulaRenderer
     return string.IsNullOrEmpty(inner) ? JsonRead(itemJson, "$") : JsonRead(itemJson, BuildJsonPath(inner));
     }
 
+    private static bool ContainsWhitespace(string s)
+    {
+        for (int i = 0; i < s.Length; i++) if (char.IsWhiteSpace(s[i])) return true;
+        return false;
+    }
+
     private static bool Truthy(string v)
     {
         if (v == null) return false;
@@ -599,20 +652,26 @@ public static class SisulaRenderer
         double num;
         if (TryParseDoubleInvariant(s, out num) && num == 0d) return false;
         if (string.Equals(s, "null", StringComparison.OrdinalIgnoreCase)) return false;
+        if (ReEmptyArray.IsMatch(s)) return false; // an empty array
         return true;
     }
 
     // Helpers for conditions
     private static int IndexOfOp(string expr, string op)
     {
-        // Find operator outside quotes (simple scan)
-        bool inStr = false; char prev = '\0';
+        // Find operator outside quotes. A literal is double-quoted; a single quote is tracked too,
+        // so that the scan agrees with the JavaScript implementation on any input.
+        bool inSingle = false, inDouble = false;
         for (int i = 0; i <= expr.Length - op.Length; i++)
         {
             var ch = expr[i];
-            if (ch == '\'' && prev != '\\') inStr = !inStr;
-            if (!inStr && string.Compare(expr, i, op, 0, op.Length, StringComparison.Ordinal) == 0) return i;
-            prev = ch;
+            if (!inSingle && !inDouble && (ch == '\'' || ch == '"'))
+            {
+                if (ch == '\'') inSingle = true; else inDouble = true;
+            }
+            else if (inSingle && ch == '\'') inSingle = false;
+            else if (inDouble && ch == '"') inDouble = false;
+            if (!inSingle && !inDouble && string.Compare(expr, i, op, 0, op.Length, StringComparison.Ordinal) == 0) return i;
         }
         return -1;
     }
@@ -997,6 +1056,7 @@ public static class SisulaRenderer
         var word = text.Substring(start, end - start + 1);
         if (string.Equals(word, "and", StringComparison.OrdinalIgnoreCase)) return true;
         if (string.Equals(word, "or", StringComparison.OrdinalIgnoreCase)) return true;
+        if (string.Equals(word, "not", StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
 
@@ -1094,16 +1154,43 @@ public static class SisulaRenderer
 
     private static string RenderInline(string text, string ctxJson, Dictionary<string, string> loopVars)
     {
-        // Tokens: $path.to.value$ or ${path.to.value}$
+        // Tokens: $path.to.value$ or ${path.to.value}$, and the escaping forms $'path'$ and $|path|$
         // Path grammar: identifier segments separated by dots, each segment may have an optional numeric index [0]
         // Example matches: S_SCHEMA, source.qualified, source.parts[0].name, part.index()
         // Method-style () only allowed at the end (metadata); intermediate segments cannot have ()
-        text = Regex.Replace(text,
-            @"\$\{?([\p{L}\p{Nd}_]+(?:\[\d+\])?(?:\.[\p{L}\p{Nd}_]+(?:\[\d+\])?)*(?:\(\))?)\}?\$",
-            m => ReadPath(ctxJson, loopVars, m.Groups[1].Value),
-            RegexOptions.Singleline);
+        // One pass over all three forms: a second pass could reinterpret dollars that came from a
+        // rendered value rather than from the template.
+        return ReToken.Replace(text, m =>
+        {
+            if (m.Groups[1].Success) return SqlLiteral(ReadPath(ctxJson, loopVars, m.Groups[1].Value));
+            if (m.Groups[2].Success) return SqlComment(ReadPath(ctxJson, loopVars, m.Groups[2].Value));
+            return ReadPath(ctxJson, loopVars, m.Groups[3].Value);
+        });
+    }
 
-        return text;
+    // Quote a value as a SQL string literal. Doubling the single quote is not enough: a backslash
+    // starts an escape sequence in some targets, a literal newline breaks the generated line, and an
+    // embedded pair of dollars would close a dollar-quoted body. The escapes are \\ for a backslash,
+    // '' for a quote, \n and \r for line breaks and \x24 for a dollar. A missing value is ''.
+    private static string SqlLiteral(string value)
+    {
+        if (value == null) return "''";
+        // Backslashes first, so the escapes introduced below are not escaped again.
+        var s = value.Replace("\\", "\\\\");
+        s = s.Replace("'", "''");
+        s = s.Replace("\r", "\\r");
+        s = s.Replace("\n", "\\n");
+        s = s.Replace("$", "\\x24");
+        return "'" + s + "'";
+    }
+
+    // Flatten a value onto one line so it cannot escape a "--" comment, and separate adjacent
+    // dollars so the text cannot close a dollar-quoted body.
+    private static string SqlComment(string value)
+    {
+        if (value == null) return string.Empty;
+        var s = Regex.Replace(value, "[\\r\\n\\t]+", " ");
+        return Regex.Replace(s, "\\$(?=\\$)", m => "$ ");
     }
 
     private static string ReadPath(string ctxJson, Dictionary<string, string> loopVars, string path)
@@ -1159,19 +1246,9 @@ public static class SisulaRenderer
         }
     }
 
-    private static string JsonRead(string json, string jsonPath)
-    {
-        if (string.IsNullOrEmpty(json)) return string.Empty;
-        // Prefer scalar via JSON_VALUE (NVARCHAR(4000)); otherwise fall back to JSON_QUERY (NVARCHAR(MAX))
-        var scalar = ExecScalar("SELECT JSON_VALUE(@j, @p)", json, jsonPath);
-        if (!string.IsNullOrEmpty(scalar)) return scalar;
-        var complex = ExecScalar("SELECT JSON_QUERY(@j, @p)", json, jsonPath);
-        return complex ?? string.Empty;
-    }
 
     private static IEnumerable<string> EnumerateJsonArray(string ctxJson, string path, Dictionary<string, string> loopVars)
     {
-        var list = new List<string>();
         if (string.IsNullOrEmpty(ctxJson)) ctxJson = string.Empty;
 
         // Resolve against loop variable if referenced; otherwise use global context
@@ -1199,11 +1276,23 @@ public static class SisulaRenderer
         jsonPath = path.StartsWith("$", StringComparison.Ordinal) ? path : BuildJsonPath(path);
 
     HavePath:
+        return OpenJsonValues(baseJson, jsonPath);
+    }
+
+#if !SISULA_TEST
+    // OpenJsonValues, JsonRead and ExecScalar are the only members that talk to SQL Server.
+    // A test build defines SISULA_TEST and gets JsonRead and OpenJsonValues from
+    // tests/SqlJsonEmulation.cs, which emulates the three JSON functions without a server.
+    private static List<string> OpenJsonValues(string baseJson, string jsonPath)
+    {
+        var list = new List<string>();
         using (var conn = new SqlConnection("context connection=true"))
         using (var cmd = conn.CreateCommand())
         {
             conn.Open();
-            cmd.CommandText = "SELECT [value] FROM OPENJSON(@j, @p) ORDER BY [key]";
+            // [key] is text, which sorts 0, 1, 10, 11, 2 once an array has more than ten elements, so
+            // the order is the number where there is one. Property names do not cast, and keep their order.
+            cmd.CommandText = "SELECT [value] FROM OPENJSON(@j, @p) ORDER BY TRY_CAST([key] AS int), [key]";
             var pj = cmd.Parameters.Add("@j", SqlDbType.NVarChar, -1); pj.Value = (object)baseJson ?? string.Empty;
             var pp = cmd.Parameters.Add("@p", SqlDbType.NVarChar, 4000); pp.Value = (object)jsonPath ?? string.Empty;
             using (var rdr = cmd.ExecuteReader())
@@ -1216,6 +1305,16 @@ public static class SisulaRenderer
             }
         }
         return list;
+    }
+
+    private static string JsonRead(string json, string jsonPath)
+    {
+        if (string.IsNullOrEmpty(json)) return string.Empty;
+        // Prefer scalar via JSON_VALUE (NVARCHAR(4000)); otherwise fall back to JSON_QUERY (NVARCHAR(MAX))
+        var scalar = ExecScalar("SELECT JSON_VALUE(@j, @p)", json, jsonPath);
+        if (!string.IsNullOrEmpty(scalar)) return scalar;
+        var complex = ExecScalar("SELECT JSON_QUERY(@j, @p)", json, jsonPath);
+        return complex ?? string.Empty;
     }
 
     private static string ExecScalar(string sql, string json, string path)
@@ -1231,6 +1330,8 @@ public static class SisulaRenderer
             return result == null || result is DBNull ? null : (string)result;
         }
     }
+#endif
+
 
     private static string BuildJsonPath(string path)
     {

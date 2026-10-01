@@ -1,11 +1,31 @@
 # Sisula language reference
 
-This document describes the small Sisula-like template language implemented by the `SisulaRenderer` SQLCLR function.
+This document describes the Sisula template language as implemented by the `SisulaRenderer` SQLCLR function, `dbo.fn_sisulate`.
+
+The language is defined in the sisula repository: its reference is `docs/LANGUAGE.md`, its reference renderer is `core/sisula.js`, and the fixtures in `tests/fixtures` there are what both implementations are tested against. This file is that reference with the notes for SQL Server filled in. When the two differ, the fixtures decide, and the C# is the one to change. See "Testing" at the end.
 
 Blocks and tokens
 - Template blocks are delimited by `/*~ ... ~*/`. Everything outside blocks is passed through unchanged. If a template has no `/*~ ... ~*/` delimiters, the entire template is treated as a Sisula script (tokens + line directives).
 - Tokens are written as `$path.to.value$` or `${path.to.value}$` and support bracket indexing (e.g. `source.parts[0].name`). Token values are resolved against the JSON bindings or loop variables.
 - Path segments may use Unicode letters (e.g. `$VARIABLES.ÅÄÖ$`); they are quoted appropriately in JSON queries.
+
+Escaping token forms
+- `$'path'$` renders the value as a **quoted SQL string literal**, including the surrounding quotes. Use it everywhere a value lands inside a literal:
+
+        COMMENT = $'task.description'$
+        CALL SYSTEM$SET_RETURN_VALUE($'step.message'$);
+
+  It doubles the single quote, doubles the backslash, turns carriage returns and newlines into `\r` and `\n`, and turns a dollar into `\x24`. The last of those matters because a doubled dollar inside a value would otherwise close the enclosing procedure body. A missing path renders `''`, which keeps the SQL valid.
+
+- `$|path|$` renders the value as **text safe on a single SQL comment line**. Newlines and tabs collapse to spaces and adjacent dollars are separated:
+
+        -- Execute: $|step.description|$
+
+  Without this a two-line description would put its second line outside the `--` comment, as executable SQL.
+
+- The plain `$path$` form interpolates verbatim. It is correct only where the value is genuinely SQL, such as a step's `sql` or an imported task body, or where it is a bare identifier.
+
+All three forms are resolved in a single pass, so a dollar that appears in a *rendered value* is never reinterpreted as a token.
 
 Line directives
 - All line directives require the `$/` prefix.
@@ -18,10 +38,10 @@ Line directives
 - If:
     - Block form: `$/ if <condition>` ... `[ $/ else ... ]` ... `$/ endif` — optional `$/ else` renders an alternate branch when the condition is false.
     - Single-line form (inline-if): `$/ if <cond> <when-true> $/ else <when-false> $/ endif` — optional `$/ else` controls the false branch; omit it to render nothing on false. The inline content respects the indentation where the directive appears.
-        - Inline-if directives can also appear inside a content line to add or remove inline fragments (useful for trailing commas or comments that depend on metadata). Nested inline directives can use `$/ else` as well.
+        - Inline-if directives can also appear inside a content line to add or remove inline fragments (useful for trailing commas or comments that depend on metadata). An inline if cannot contain another inline if; use block ifs for nested choices.
 
 Comments
-- Line comments: start a line with `$-` (optionally indented) to remove it from the rendered output.
+- Line comments: start a line with `$-` (optionally indented) to remove it, newline and all, from the rendered output.
 - Inline comments: wrap comment text as `$- ... -$` to drop the span while keeping the surrounding content.
 - Comments are stripped before token or directive evaluation.
 
@@ -32,24 +52,33 @@ Loop metadata
   - Only the method form is supported to avoid ambiguity in nested loops and path parsing.
 
 Expression language
-- Comparison operators: `==, !=, >=, <=, >, <`.
+- Comparison operators: `==, !=, >=, <=, >, <`. A single `=` means the same as `==`. Numbers are compared as numbers and everything else as text, ignoring case.
 - Logical operators: `and`, `or` (case-insensitive). Operator precedence: `and` is evaluated before `or`.
+- Negation: `not x` or `!x` (case-insensitive) negates the single term that follows it, which can be a path, a loop-metadata call, a function call or a comparison (`not a == b` means `not (a == b)`). `not` binds tighter than `and` and `or`, so `not a or b` is `(not a) or b`. There are no parentheses.
 - Functions: `contains(x,"y")`, `startswith(x,"y")`, `endswith(x,"y")`.
 - String literals use double quotes (`"value"`). Escape a double quote inside a literal with `""`.
 - Single-quoted literals are not supported (use double quotes exclusively).
-- Truthy checks on paths: null/empty/false/"0"/"null" are falsey.
+- Truthy checks on paths: null/empty/false/"0"/"null" and an empty array are falsey. Any other array or object is truthy.
+- A condition the renderer cannot parse, for example `x y z`, is an error. It is never silently treated as false.
 - Expressions are used by `$/ if` and `foreach where`.
 
 JSON binding and resolution
-- Bindings are passed as a single JSON document to `fn_sisulate(template, bindingsJson)`.
-- Resolution uses SQL Server JSON functions: `JSON_VALUE`, `JSON_QUERY`, and `OPENJSON`. No third-party JSON libraries are used.
-- `foreach` uses `OPENJSON` to enumerate arrays; `JsonRead` uses `JSON_VALUE` then `JSON_QUERY` for scalar/complex reads.
-- Scalar tokens are limited to NVARCHAR(4000) when read via `JSON_VALUE`.
+- Bindings are passed as a single JSON document: `dbo.fn_sisulate(template, bindingsJson)`.
+- Resolution uses the SQL Server JSON functions `JSON_VALUE`, `JSON_QUERY` and `OPENJSON` (SQL Server 2016 or later). No third-party JSON libraries are used.
+- `foreach` uses `OPENJSON` to enumerate an array, in index order. A path is read with `JSON_VALUE` for a scalar and `JSON_QUERY` for an object or array.
+- Scalar values are returned as strings; complex values (objects/arrays) are returned as JSON text, as `JSON_QUERY` returns it.
+- **A path reaches only what the JSON itself holds**: the properties of an object, and the elements of an array by index, `[n]`. A path that names anything else, such as a property that is not there, an index past the end, a name on an array or a segment below a scalar, has no value, and renders as an empty string. In particular there is no `length`: an array has no named members, and neither does a string. Where a template needs a count, put the count in the bindings. This is what lets the same template give the same output in every host: the JavaScript implementation reads the document as JavaScript objects, which have members JSON does not (`length`, `constructor`, `toString`), and this implementation reads it with the JSON functions, which do not see them.
+- A property whose name happens to be `length` is an ordinary property and is read like any other.
+- Scalar tokens are limited to NVARCHAR(4000), because `JSON_VALUE` returns at most 4000 characters. A longer scalar renders as an empty string.
 
 Authoring and installing templates
 - Author templates as `.sql` files under `templates/` to get proper SQL syntax highlighting in SSMS/VS Code.
 - Install templates into the DB with `scripts/install.ps1 -InstallTemplates`.
 
+Testing
+- `tests\run-fixtures.ps1` compiles the renderer with the symbol `SISULA_TEST`, which swaps the three members that call SQL Server for an emulation of the JSON functions, and runs every fixture of the sisula repository through `fn_sisulate`. It needs no SQL Server. It looks for a sisula checkout next to this repository, or takes `-Fixtures`.
+- `tests\run-fixtures.ps1 -WriteSqlTest sql\test_fixtures.sql` writes the same fixtures as a T-SQL script. Running that script on a server is the check of what the emulation can only assume.
+- A change to the language starts in the sisula repository: a fixture, then the reference renderer, then this one.
 Examples
 
 Inline token example:
@@ -146,7 +175,7 @@ Foreach with WHERE using AND/OR:
     $/ endfor
 
 Whitespace & inline directive rules
------------------------------------
+------------------------------------
 
 Small templates often rely on precise spacing when embedding inline directives. The renderer follows these ergonomic rules so authors get intuitive results:
 
@@ -155,5 +184,10 @@ Small templates often rely on precise spacing when embedding inline directives. 
 - When an inline directive is embedded in a larger inline `foreach`/`if`, spacing between directives is treated as separation, not as part of a branch. In practice this means you can add a single space before/after branch content as a separator and it will be preserved consistently.
     - The inline-if parser avoids splitting the condition at whitespace that is adjacent to logical operators (`and`/`or`) or binary operators (`==`, `=`, `!=`, `>=` etc.). This prevents accidental branch splitting for expressions like `c.type == "varchar" or c.type == "char"`.
 
-If you need separators only between items (but not after the final item) prefer using a conditional that inspects `varName.last()` or generate separators in a separate `foreach` pass.
+- Whitespace after `$/ endif` is swallowed, and so is the whitespace between an inline condition and its first branch. Put spaces that belong to the output inside a branch: `$/ if x $x.count$ $/ else 0 $/ endif items`.
+- In `$/ if c A $/ else B$/ endif` the true branch keeps the space before `$/ else`, and the false branch keeps anything before `$/ endif`.
+- A line that holds only an inline if renders as an empty line when the chosen branch is empty. Use a block if to leave out a whole line.
+- To end a line with a space that an editor might trim, write it before an empty inline comment: `x $--$` renders as `x ` followed by the newline.
+- A line that holds a complete inline `if` or `foreach` never opens a block, so it is safe inside the body of a block `if` or `foreach`.
 
+If you need separators only between items (but not after the final item) prefer using a conditional that inspects `varName.last()`, for example `$c.name$$/ if not c.last() ,$/ endif`, or generate separators in a separate `foreach` pass.
