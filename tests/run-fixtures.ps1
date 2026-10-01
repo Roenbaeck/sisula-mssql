@@ -14,7 +14,7 @@
     -WriteSqlTest does not run anything. It writes the same fixtures as a T-SQL script that runs
     each one through dbo.fn_sisulate on a real server, which is the check of the T-SQL side.
 
-    Without -Fixtures it looks for a sisula checkout next to this repository: sisula-master, then sisula.
+    Without -Fixtures it uses tests\fixtures of the sisula checkout next to this repository.
     Uses the same .NET Framework 4 csc.exe as scripts\build.ps1, so it compiles C# 5.
 
     This checks the renderer's own logic. The emulation reproduces the documented behaviour of
@@ -35,9 +35,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $parent = Split-Path -Parent $root
 
 if (-not $Fixtures) {
-    $candidates = @('sisula-master', 'sisula') | ForEach-Object { Join-Path $parent "$_\tests\fixtures" }
-    $Fixtures = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $Fixtures) { throw "No sisula checkout with tests\fixtures found next to this repository; pass -Fixtures." }
+    $Fixtures = Join-Path $parent 'sisula\tests\fixtures'
+    if (-not (Test-Path $Fixtures)) { throw "No sisula checkout with tests\fixtures found at $Fixtures; clone the sisula repository next to this one, or pass -Fixtures." }
 }
 $Fixtures = (Resolve-Path $Fixtures).Path
 
