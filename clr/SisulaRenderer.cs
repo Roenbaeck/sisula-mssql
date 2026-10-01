@@ -7,7 +7,9 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.SqlServer.Server;
 
-public static class SisulaRenderer
+// Partial so that tests/SqlJsonEmulation.cs can supply the JSON access in a test build, which
+// defines SISULA_TEST. A normal build is a single file and behaves exactly as before.
+public static partial class SisulaRenderer
 {
     // Precompiled directive regexes (caching for performance)
     private static readonly Regex ReForeach = new Regex("^\\s*\\$/\\s*foreach\\s+(\\w+)\\s+in\\s+(.+?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -1159,19 +1161,9 @@ public static class SisulaRenderer
         }
     }
 
-    private static string JsonRead(string json, string jsonPath)
-    {
-        if (string.IsNullOrEmpty(json)) return string.Empty;
-        // Prefer scalar via JSON_VALUE (NVARCHAR(4000)); otherwise fall back to JSON_QUERY (NVARCHAR(MAX))
-        var scalar = ExecScalar("SELECT JSON_VALUE(@j, @p)", json, jsonPath);
-        if (!string.IsNullOrEmpty(scalar)) return scalar;
-        var complex = ExecScalar("SELECT JSON_QUERY(@j, @p)", json, jsonPath);
-        return complex ?? string.Empty;
-    }
 
     private static IEnumerable<string> EnumerateJsonArray(string ctxJson, string path, Dictionary<string, string> loopVars)
     {
-        var list = new List<string>();
         if (string.IsNullOrEmpty(ctxJson)) ctxJson = string.Empty;
 
         // Resolve against loop variable if referenced; otherwise use global context
@@ -1199,6 +1191,16 @@ public static class SisulaRenderer
         jsonPath = path.StartsWith("$", StringComparison.Ordinal) ? path : BuildJsonPath(path);
 
     HavePath:
+        return OpenJsonValues(baseJson, jsonPath);
+    }
+
+#if !SISULA_TEST
+    // OpenJsonValues, JsonRead and ExecScalar are the only members that talk to SQL Server.
+    // A test build defines SISULA_TEST and gets JsonRead and OpenJsonValues from
+    // tests/SqlJsonEmulation.cs, which emulates the three JSON functions without a server.
+    private static List<string> OpenJsonValues(string baseJson, string jsonPath)
+    {
+        var list = new List<string>();
         using (var conn = new SqlConnection("context connection=true"))
         using (var cmd = conn.CreateCommand())
         {
@@ -1218,6 +1220,16 @@ public static class SisulaRenderer
         return list;
     }
 
+    private static string JsonRead(string json, string jsonPath)
+    {
+        if (string.IsNullOrEmpty(json)) return string.Empty;
+        // Prefer scalar via JSON_VALUE (NVARCHAR(4000)); otherwise fall back to JSON_QUERY (NVARCHAR(MAX))
+        var scalar = ExecScalar("SELECT JSON_VALUE(@j, @p)", json, jsonPath);
+        if (!string.IsNullOrEmpty(scalar)) return scalar;
+        var complex = ExecScalar("SELECT JSON_QUERY(@j, @p)", json, jsonPath);
+        return complex ?? string.Empty;
+    }
+
     private static string ExecScalar(string sql, string json, string path)
     {
         using (var conn = new SqlConnection("context connection=true"))
@@ -1231,6 +1243,8 @@ public static class SisulaRenderer
             return result == null || result is DBNull ? null : (string)result;
         }
     }
+#endif
+
 
     private static string BuildJsonPath(string path)
     {
