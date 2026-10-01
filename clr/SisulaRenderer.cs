@@ -1290,7 +1290,9 @@ public static partial class SisulaRenderer
         using (var cmd = conn.CreateCommand())
         {
             conn.Open();
-            cmd.CommandText = "SELECT [value] FROM OPENJSON(@j, @p) ORDER BY [key]";
+            // [key] is text, which sorts 0, 1, 10, 11, 2 once an array has more than ten elements, so
+            // the order is the number where there is one. Property names do not cast, and keep their order.
+            cmd.CommandText = "SELECT [value] FROM OPENJSON(@j, @p) ORDER BY TRY_CAST([key] AS int), [key]";
             var pj = cmd.Parameters.Add("@j", SqlDbType.NVarChar, -1); pj.Value = (object)baseJson ?? string.Empty;
             var pp = cmd.Parameters.Add("@p", SqlDbType.NVarChar, 4000); pp.Value = (object)jsonPath ?? string.Empty;
             using (var rdr = cmd.ExecuteReader())
